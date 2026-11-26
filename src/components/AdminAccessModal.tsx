@@ -76,7 +76,9 @@ export const AdminAccessModal: React.FC<AdminAccessModalProps> = ({
       setErr(res.error || 'รหัสผ่านแอดมินไม่ถูกต้อง');
     } else {
       setAdminPinInput('');
-      setMsg('เข้าสู่โหมดแอดมินเรียบร้อยแล้ว สามารถล็อกหรือปลดล็อกสิทธิ์ได้ทันที');
+      setViewMode(access.viewMode);
+      setEditMode(access.editMode);
+      setMsg('ยืนยันสิทธิ์แอดมินเรียบร้อยแล้ว');
     }
   };
 
@@ -145,14 +147,16 @@ export const AdminAccessModal: React.FC<AdminAccessModalProps> = ({
               }}
               className="w-9 h-9 rounded-xl text-white flex items-center justify-center shrink-0"
             >
-              {access.isAdmin ? <ShieldCheck className="w-5 h-5" /> : <Shield className="w-5 h-5" />}
+              {access.isAdmin ? <ShieldCheck className="w-5 h-5" /> : <Lock className="w-5 h-5" />}
             </div>
             <div>
               <h2 className="text-base font-bold font-serif-thai">
-                ระบบแอดมิน & ซิงก์ฐานข้อมูล Supabase
+                {access.isAdmin ? 'ตั้งค่าระบบแอดมิน & ฐานข้อมูล' : 'ยืนยันรหัสผ่านแอดมิน'}
               </h2>
               <p style={{ color: palette.textMuted }} className="text-[11px]">
-                ควบคุมการล็อก/ปลดล็อกสิทธิ์ดูและแก้ไขของคนในครอบครัว
+                {access.isAdmin
+                  ? 'ควบคุมการล็อก/ปลดล็อกสิทธิ์ดูและแก้ไขของทั้งตระกูล'
+                  : 'กรุณากรอกรหัสผ่านก่อนเข้าดูหรือแก้ไขการตั้งค่าแอดมิน'}
               </p>
             </div>
           </div>
@@ -166,97 +170,6 @@ export const AdminAccessModal: React.FC<AdminAccessModalProps> = ({
         </div>
 
         <div className="p-6 space-y-5 max-h-[78vh] overflow-y-auto">
-          {/* Cloud Status Banner */}
-          <div
-            style={{ backgroundColor: palette.bgSubtle, borderColor: palette.border }}
-            className="p-3.5 rounded-xl border flex flex-wrap items-center justify-between gap-3"
-          >
-            <div className="flex items-center gap-2.5">
-              {isSupabaseConfigured ? (
-                <Cloud className="w-5 h-5 shrink-0" style={{ color: palette.primary }} />
-              ) : (
-                <CloudOff className="w-5 h-5 shrink-0" style={{ color: palette.accent }} />
-              )}
-              <div>
-                <div className="text-xs font-semibold">
-                  {isSupabaseConfigured
-                    ? cloudStatus === 'synced'
-                      ? `เชื่อมต่อ Supabase Cloud แล้ว (ห้อง: ${FAMILY_TREE_ID})`
-                      : cloudStatus === 'saving'
-                        ? 'กำลังบันทึกขึ้น Supabase...'
-                        : cloudStatus === 'connecting'
-                          ? 'กำลังเชื่อมต่อ Supabase...'
-                          : 'เชื่อมต่อ Supabase มีปัญหา (ตรวจสอบ .env / SQL)'
-                    : 'โหมดออฟไลน์ในเครื่อง (ยังไม่ได้ใส่ค่า Supabase ใน .env)'}
-                </div>
-                <div style={{ color: palette.textMuted }} className="text-[11px]">
-                  {isSupabaseConfigured
-                    ? lastSyncedAt
-                      ? `ซิงก์ล่าสุด: ${new Date(lastSyncedAt).toLocaleTimeString('th-TH')}`
-                      : 'ซิงก์แบบเรียลไทม์อัตโนมัติทุกเครื่อง'
-                    : 'ทดสอบล็อก/ปลดล็อกแอดมินได้เลย และเชื่อมต่อ Supabase ได้ทุกเมื่อ'}
-                </div>
-              </div>
-            </div>
-
-            {isSupabaseConfigured && (
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={onManualSyncPull}
-                  style={{ borderColor: palette.border, backgroundColor: palette.bgSurface }}
-                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-[11px] font-medium hover:opacity-85 cursor-pointer"
-                  title="ดึงข้อมูลล่าสุดจาก Supabase"
-                >
-                  <RefreshCw className="w-3 h-3" />
-                  ดึงล่าสุด
-                </button>
-                {access.canEdit && (
-                  <button
-                    type="button"
-                    onClick={onManualSyncPush}
-                    style={{ backgroundColor: palette.primary }}
-                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-white text-[11px] font-medium hover:opacity-90 cursor-pointer"
-                    title="ส่งข้อมูลปัจจุบันขึ้น Supabase ทันที"
-                  >
-                    <UploadCloud className="w-3 h-3" />
-                    ส่งขึ้น Cloud
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* Current Permission Summary */}
-          <div className="grid grid-cols-2 gap-2.5 text-xs">
-            <div
-              style={{ backgroundColor: palette.bgSubtle, borderColor: palette.border }}
-              className="p-3 rounded-xl border"
-            >
-              <div style={{ color: palette.textMuted }} className="text-[11px] flex items-center gap-1 mb-1">
-                <Eye className="w-3 h-3" /> สิทธิ์การเข้าชม
-              </div>
-              <div className="font-semibold">
-                {access.viewMode === 'public' ? 'เปิดให้ทุกคนที่มีลิงก์ดูได้' : 'ล็อกด้วยรหัสเข้าบ้าน'}
-              </div>
-            </div>
-            <div
-              style={{ backgroundColor: palette.bgSubtle, borderColor: palette.border }}
-              className="p-3 rounded-xl border"
-            >
-              <div style={{ color: palette.textMuted }} className="text-[11px] flex items-center gap-1 mb-1">
-                <Edit3 className="w-3 h-3" /> สิทธิ์การแก้ไข
-              </div>
-              <div className="font-semibold">
-                {access.editMode === 'open'
-                  ? 'เปิดให้ทุกคนช่วยกันแก้'
-                  : access.editMode === 'pin'
-                    ? 'ต้องใส่รหัสแก้ไข'
-                    : 'ล็อก (เฉพาะแอดมิน)'}
-              </div>
-            </div>
-          </div>
-
           {msg && (
             <div className="px-3.5 py-2.5 rounded-xl bg-[#E9F2EE] border border-[#C4DDD3] text-[#1D473B] text-xs flex items-center gap-2">
               <Check className="w-4 h-4 shrink-0" />
@@ -269,9 +182,10 @@ export const AdminAccessModal: React.FC<AdminAccessModalProps> = ({
             </div>
           )}
 
-          {/* If NOT Admin: Unlock Edit PIN (when editMode === 'pin') + Admin Login */}
+          {/* LOCKED GATE: Must enter Admin PIN before seeing ANY admin settings */}
           {!access.isAdmin ? (
             <div className="space-y-4">
+              {/* If family edit requires an Edit PIN, let family members unlock editing here */}
               {access.editMode === 'pin' && !access.canEdit && (
                 <form
                   onSubmit={handleEditUnlock}
@@ -282,6 +196,9 @@ export const AdminAccessModal: React.FC<AdminAccessModalProps> = ({
                     <KeyRound className="w-3.5 h-3.5" />
                     ปลดล็อกสิทธิ์แก้ไขสำหรับสมาชิกครอบครัว
                   </div>
+                  <p style={{ color: palette.textMuted }} className="text-[11px]">
+                    กรอกรหัสผ่านแก้ไขของครอบครัวเพื่อเพิ่ม/แก้ไขข้อมูลสมาชิก (ไม่ต้องใช้รหัสแอดมิน)
+                  </p>
                   <div className="flex gap-2">
                     <input
                       type="password"
@@ -293,7 +210,7 @@ export const AdminAccessModal: React.FC<AdminAccessModalProps> = ({
                     />
                     <button
                       type="submit"
-                      disabled={busy}
+                      disabled={busy || !editPinInput.trim()}
                       style={{ backgroundColor: palette.accent }}
                       className="px-4 py-2 rounded-xl text-white text-xs font-semibold cursor-pointer disabled:opacity-50"
                     >
@@ -306,47 +223,55 @@ export const AdminAccessModal: React.FC<AdminAccessModalProps> = ({
               <form
                 onSubmit={handleAdminLogin}
                 style={{ borderColor: palette.border, backgroundColor: palette.bgSubtle }}
-                className="p-4 rounded-xl border space-y-3"
+                className="p-5 rounded-2xl border space-y-3.5"
               >
-                <div>
-                  <div className="text-xs font-bold flex items-center gap-1.5">
-                    <Shield className="w-4 h-4" style={{ color: palette.primary }} />
-                    เข้าสู่ระบบแอดมิน (สำหรับผู้ดูแลผังตระกูล)
+                <div className="flex items-start gap-3">
+                  <div
+                    style={{ backgroundColor: palette.primarySoft, color: palette.primary }}
+                    className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
+                  >
+                    <Shield className="w-5 h-5" />
                   </div>
-                  <p style={{ color: palette.textMuted }} className="text-[11px] mt-0.5">
-                    รหัสแอดมินเริ่มต้นคือ <code className="font-mono font-bold">1234</code> (แนะนำให้เปลี่ยนทันทีหลังเข้าสู่ระบบ)
-                  </p>
+                  <div>
+                    <div className="text-sm font-bold">เข้าสู่หน้าตั้งค่าแอดมิน</div>
+                    <p style={{ color: palette.textMuted }} className="text-xs mt-0.5 leading-relaxed">
+                      ต้องยืนยันรหัสผ่านแอดมินก่อน จึงจะดูการตั้งค่าสิทธิ์ ล็อก/ปลดล็อกผัง เปลี่ยนรหัสผ่าน หรือสร้างตระกูลใหม่ได้
+                    </p>
+                  </div>
                 </div>
-                <div className="flex gap-2">
+
+                <div className="space-y-2.5">
                   <input
                     type="password"
+                    autoFocus
                     value={adminPinInput}
                     onChange={(e) => setAdminPinInput(e.target.value)}
                     placeholder="กรอกรหัสผ่านแอดมิน..."
                     style={{ backgroundColor: palette.bgSurface, borderColor: palette.border }}
-                    className="flex-1 px-3 py-2 text-sm rounded-xl border focus:outline-none"
+                    className="w-full px-4 py-2.5 text-center text-base tracking-[0.2em] rounded-xl border focus:outline-none"
                   />
                   <button
                     type="submit"
-                    disabled={busy}
+                    disabled={busy || !adminPinInput.trim()}
                     style={{ backgroundColor: palette.primary }}
-                    className="px-4 py-2 rounded-xl text-white text-xs font-semibold cursor-pointer disabled:opacity-50"
+                    className="w-full py-2.5 rounded-xl text-white text-xs font-semibold hover:opacity-90 cursor-pointer disabled:opacity-50"
                   >
-                    เข้าสู่ระบบ
+                    {busy ? 'กำลังตรวจสอบรหัสผ่าน...' : 'ปลดล็อกเข้าหน้าแอดมิน'}
                   </button>
                 </div>
               </form>
             </div>
           ) : (
-            /* ADMIN CONTROL PANEL */
+            /* UNLOCKED ADMIN CONTROL PANEL */
             <form onSubmit={handleSaveRules} className="space-y-5">
+              {/* Top Admin Active Pill & Logout */}
               <div className="flex items-center justify-between">
                 <span
                   style={{ backgroundColor: palette.primarySoft, color: palette.primary }}
                   className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold"
                 >
                   <ShieldCheck className="w-3.5 h-3.5" />
-                  คุณกำลังใช้งานในสิทธิ์แอดมิน
+                  ยืนยันสิทธิ์แอดมินแล้ว
                 </span>
                 <button
                   type="button"
@@ -354,8 +279,65 @@ export const AdminAccessModal: React.FC<AdminAccessModalProps> = ({
                   className="inline-flex items-center gap-1 text-xs text-[#C24B38] hover:underline cursor-pointer"
                 >
                   <LogOut className="w-3.5 h-3.5" />
-                  ออกจากโหมดแอดมิน
+                  ล็อกออกจากโหมดแอดมิน
                 </button>
+              </div>
+
+              {/* Cloud Sync Control Banner (Visible to Admin only) */}
+              <div
+                style={{ backgroundColor: palette.bgSubtle, borderColor: palette.border }}
+                className="p-3.5 rounded-xl border flex flex-wrap items-center justify-between gap-3"
+              >
+                <div className="flex items-center gap-2.5">
+                  {isSupabaseConfigured ? (
+                    <Cloud className="w-5 h-5 shrink-0" style={{ color: palette.primary }} />
+                  ) : (
+                    <CloudOff className="w-5 h-5 shrink-0" style={{ color: palette.accent }} />
+                  )}
+                  <div>
+                    <div className="text-xs font-semibold">
+                      {isSupabaseConfigured
+                        ? cloudStatus === 'synced'
+                          ? `เชื่อมต่อ Supabase Cloud แล้ว (ห้อง: ${FAMILY_TREE_ID})`
+                          : cloudStatus === 'saving'
+                            ? 'กำลังบันทึกขึ้น Supabase...'
+                            : cloudStatus === 'connecting'
+                              ? 'กำลังเชื่อมต่อ Supabase...'
+                              : 'เชื่อมต่อ Supabase มีปัญหา'
+                        : 'โหมดออฟไลน์ในเครื่อง'}
+                    </div>
+                    <div style={{ color: palette.textMuted }} className="text-[11px]">
+                      {isSupabaseConfigured
+                        ? lastSyncedAt
+                          ? `ซิงก์ล่าสุด: ${new Date(lastSyncedAt).toLocaleTimeString('th-TH')}`
+                          : 'ซิงก์ข้อมูลสมาชิกแบบเรียลไทม์ทุกเครื่อง'
+                        : 'ยังไม่ได้ตั้งค่า Supabase ใน .env'}
+                    </div>
+                  </div>
+                </div>
+
+                {isSupabaseConfigured && (
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={onManualSyncPull}
+                      style={{ borderColor: palette.border, backgroundColor: palette.bgSurface }}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-[11px] font-medium hover:opacity-85 cursor-pointer"
+                    >
+                      <RefreshCw className="w-3 h-3" />
+                      ดึงล่าสุด
+                    </button>
+                    <button
+                      type="button"
+                      onClick={onManualSyncPush}
+                      style={{ backgroundColor: palette.primary }}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-white text-[11px] font-medium hover:opacity-90 cursor-pointer"
+                    >
+                      <UploadCloud className="w-3 h-3" />
+                      ส่งขึ้น Cloud
+                    </button>
+                  </div>
+                )}
               </div>
 
               {/* 1. View Access Lock/Unlock */}
@@ -406,7 +388,7 @@ export const AdminAccessModal: React.FC<AdminAccessModalProps> = ({
                     type="text"
                     value={newViewPin}
                     onChange={(e) => setNewViewPin(e.target.value)}
-                    placeholder="ตั้งรหัสเข้าบ้านใหม่ (เว้นว่างเพื่อใช้รหัสเดิม ค่าเริ่มต้น 0000)"
+                    placeholder="ตั้งรหัสเข้าบ้านใหม่ (เว้นว่างเพื่อใช้รหัสเดิม)"
                     style={{ backgroundColor: palette.bgSurface, borderColor: palette.border }}
                     className="w-full px-3 py-2 text-xs rounded-xl border focus:outline-none"
                   />
@@ -479,7 +461,7 @@ export const AdminAccessModal: React.FC<AdminAccessModalProps> = ({
                     type="text"
                     value={newEditPin}
                     onChange={(e) => setNewEditPin(e.target.value)}
-                    placeholder="ตั้งรหัสแก้ไขใหม่ (เว้นว่างเพื่อใช้รหัสเดิม ค่าเริ่มต้น 8888)"
+                    placeholder="ตั้งรหัสแก้ไขใหม่ (เว้นว่างเพื่อใช้รหัสเดิม)"
                     style={{ backgroundColor: palette.bgSurface, borderColor: palette.border }}
                     className="w-full px-3 py-2 text-xs rounded-xl border focus:outline-none"
                   />

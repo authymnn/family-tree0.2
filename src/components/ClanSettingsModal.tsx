@@ -7,14 +7,17 @@ import {
   RotateCcw,
   FilePlus2,
   Check,
+  Shield,
+  Lock,
 } from 'lucide-react';
 import { FamilyTreeData } from '../types/family';
 import { validateImportedData } from '../utils/familyOps';
 
 interface ClanSettingsModalProps {
   data: FamilyTreeData;
-  canEdit?: boolean;
+  isAdmin: boolean;
   onClose: () => void;
+  onOpenAdminLogin: () => void;
   onUpdateClanInfo: (clanName: string, motto: string) => void;
   onImportData: (imported: FamilyTreeData) => void;
   onExportPng: () => Promise<void>;
@@ -24,8 +27,9 @@ interface ClanSettingsModalProps {
 
 export const ClanSettingsModal: React.FC<ClanSettingsModalProps> = ({
   data,
-  canEdit = true,
+  isAdmin,
   onClose,
+  onOpenAdminLogin,
   onUpdateClanInfo,
   onImportData,
   onExportPng,
@@ -43,7 +47,7 @@ export const ClanSettingsModal: React.FC<ClanSettingsModalProps> = ({
 
   const handleSaveInfo = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!clanName.trim()) return;
+    if (!isAdmin || !clanName.trim()) return;
     onUpdateClanInfo(clanName.trim(), motto.trim());
     setStatusMsg('บันทึกชื่อและคติประจำตระกูลเรียบร้อยแล้ว');
     setTimeout(() => setStatusMsg(''), 2500);
@@ -63,6 +67,7 @@ export const ClanSettingsModal: React.FC<ClanSettingsModalProps> = ({
   };
 
   const handleImportFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!isAdmin) return;
     const file = e.target.files?.[0];
     if (!file) return;
     setErrorMsg('');
@@ -113,7 +118,7 @@ export const ClanSettingsModal: React.FC<ClanSettingsModalProps> = ({
               ตั้งค่าตระกูล & สำรองข้อมูล
             </h2>
             <p className="text-xs text-[#64716C]">
-              ข้อมูลทั้งหมดบันทึกอัตโนมัติในเครื่อง และสามารถส่งออกเพื่อแชร์ให้ญาติได้
+              ส่งออกภาพหรือสำรองไฟล์ได้ทุกคน · การเปลี่ยนชื่อ/สร้างตระกูลใหม่สงวนสิทธิ์เฉพาะแอดมิน
             </p>
           </div>
           <button
@@ -137,46 +142,10 @@ export const ClanSettingsModal: React.FC<ClanSettingsModalProps> = ({
             </div>
           )}
 
-          {/* Clan Name & Motto */}
-          {canEdit && (
-            <form onSubmit={handleSaveInfo} className="space-y-3">
-              <h4 className="text-xs font-semibold uppercase tracking-wide text-[#8C8477]">
-                ข้อมูลประจำตระกูล
-              </h4>
-              <div>
-                <label className="block text-xs font-medium text-[#53615C] mb-1">ชื่อตระกูล</label>
-                <input
-                  type="text"
-                  value={clanName}
-                  onChange={(e) => setClanName(e.target.value)}
-                  className="w-full px-3 py-2 text-sm rounded-xl border border-[#DDD6CA] focus:outline-none focus:border-[#2E6254]"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-[#53615C] mb-1">
-                  คติประจำตระกูล / คำอธิบาย
-                </label>
-                <input
-                  type="text"
-                  value={motto}
-                  onChange={(e) => setMotto(e.target.value)}
-                  placeholder="เช่น รากฐานมั่นคง เชื่อมโยงสายใย จากรุ่นสู่รุ่น"
-                  className="w-full px-3 py-2 text-sm rounded-xl border border-[#DDD6CA] focus:outline-none focus:border-[#2E6254]"
-                />
-              </div>
-              <button
-                type="submit"
-                className="px-4 py-2 rounded-xl bg-[#2E6254] text-white text-xs font-medium hover:bg-[#234E42] transition-colors cursor-pointer"
-              >
-                บันทึกชื่อตระกูล
-              </button>
-            </form>
-          )}
-
-          {/* Export / Import */}
-          <div className={`space-y-2.5 ${canEdit ? 'pt-4 border-t border-[#F0ECE4]' : ''}`}>
+          {/* Export / Backup (Safe for everyone to download) */}
+          <div className="space-y-2.5">
             <h4 className="text-xs font-semibold uppercase tracking-wide text-[#8C8477]">
-              ส่งออก & นำเข้าข้อมูล
+              ส่งออกภาพ & สำรองข้อมูล
             </h4>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
               <button
@@ -189,11 +158,11 @@ export const ClanSettingsModal: React.FC<ClanSettingsModalProps> = ({
                 </div>
                 <div>
                   <div className="text-xs font-semibold text-[#1C2B26]">สำรองไฟล์ JSON</div>
-                  <div className="text-[11px] text-[#7C8782]">เก็บสำรองหรือส่งต่อให้ญาติ</div>
+                  <div className="text-[11px] text-[#7C8782]">ดาวน์โหลดเก็บสำรองไว้ในเครื่อง</div>
                 </div>
               </button>
 
-              {canEdit && (
+              {isAdmin && (
                 <>
                   <button
                     type="button"
@@ -205,7 +174,7 @@ export const ClanSettingsModal: React.FC<ClanSettingsModalProps> = ({
                     </div>
                     <div>
                       <div className="text-xs font-semibold text-[#1C2B26]">นำเข้าไฟล์ JSON</div>
-                      <div className="text-[11px] text-[#7C8782]">กู้คืนหรือเปิดผังจากไฟล์</div>
+                      <div className="text-[11px] text-[#7C8782]">เฉพาะแอดมิน (เขียนทับทั้งผัง)</div>
                     </div>
                   </button>
                   <input
@@ -233,100 +202,163 @@ export const ClanSettingsModal: React.FC<ClanSettingsModalProps> = ({
                   {exportingPng ? 'กำลังสร้างรูปภาพความละเอียดสูง...' : 'ดาวน์โหลดภาพผังตระกูล (PNG)'}
                 </div>
                 <div className="text-[11px] text-[#7C8782]">
-                  เหมาะสำหรับส่งเข้ากลุ่ม LINE ครอบครัว หรือสั่งพิมพ์เก็บไว้
+                  ส่งออกตามสไตล์การ์ดและทิศทางที่คุณเลือกอยู่ตอนนี้ เหมาะสำหรับส่งเข้า LINE
                 </div>
               </div>
             </button>
           </div>
 
-          {/* Start Fresh / Load Sample */}
-          {canEdit && (
-            <div className="space-y-2.5 pt-4 border-t border-[#F0ECE4]">
-              <h4 className="text-xs font-semibold uppercase tracking-wide text-[#8C8477]">
-                เริ่มต้นตระกูลใหม่ / ข้อมูลตัวอย่าง
-              </h4>
-
-              {confirmMode === 'none' && (
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setConfirmMode('fresh')}
-                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-[#DDD6CA] text-xs font-medium text-[#1C2B26] hover:bg-[#FAF8F4] cursor-pointer"
-                  >
-                    <FilePlus2 className="w-3.5 h-3.5 text-[#2E6254]" />
-                    เริ่มสร้างผังตระกูลใหม่ (ล้างข้อมูลเดิม)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setConfirmMode('sample')}
-                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-[#DDD6CA] text-xs font-medium text-[#53615C] hover:bg-[#FAF8F4] cursor-pointer"
-                  >
-                    <RotateCcw className="w-3.5 h-3.5" />
-                    โหลดข้อมูลตัวอย่าง (ตระกูลกิตติวัฒนากุล)
-                  </button>
-                </div>
-              )}
-
-              {confirmMode === 'fresh' && (
-                <div className="p-3.5 rounded-xl bg-[#FAF8F4] border border-[#E5DFD5] space-y-2.5">
-                  <div className="text-xs font-medium text-[#1C2B26]">
-                    ตั้งชื่อตระกูลใหม่ของคุณ (ข้อมูลเดิมจะถูกแทนที่ สามารถสำรอง JSON ไว้ก่อนได้)
-                  </div>
+          {/* ADMIN-ONLY SECTION: Clan Name, Import, Start Fresh, Reset */}
+          {isAdmin ? (
+            <>
+              <form onSubmit={handleSaveInfo} className="space-y-3 pt-4 border-t border-[#F0ECE4]">
+                <h4 className="text-xs font-semibold uppercase tracking-wide text-[#8C8477] flex items-center gap-1.5">
+                  <Shield className="w-3.5 h-3.5 text-[#2E6254]" />
+                  ข้อมูลประจำตระกูล (เฉพาะแอดมิน)
+                </h4>
+                <div>
+                  <label className="block text-xs font-medium text-[#53615C] mb-1">ชื่อตระกูล</label>
                   <input
                     type="text"
-                    value={freshName}
-                    onChange={(e) => setFreshName(e.target.value)}
-                    placeholder="เช่น ตระกูล ศรีสุข"
-                    className="w-full px-3 py-1.5 text-sm rounded-xl border border-[#DDD6CA] bg-white focus:outline-none focus:border-[#2E6254]"
+                    value={clanName}
+                    onChange={(e) => setClanName(e.target.value)}
+                    className="w-full px-3 py-2 text-sm rounded-xl border border-[#DDD6CA] focus:outline-none focus:border-[#2E6254]"
                   />
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onStartFresh(freshName.trim() || 'ผังตระกูลของฉัน');
-                        onClose();
-                      }}
-                      className="px-3.5 py-1.5 rounded-lg bg-[#2E6254] text-white text-xs font-medium cursor-pointer"
-                    >
-                      เริ่มสร้างตระกูลใหม่
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setConfirmMode('none')}
-                      className="px-3.5 py-1.5 rounded-lg bg-white border border-[#DDD6CA] text-xs text-[#53615C] cursor-pointer"
-                    >
-                      ยกเลิก
-                    </button>
-                  </div>
                 </div>
-              )}
+                <div>
+                  <label className="block text-xs font-medium text-[#53615C] mb-1">
+                    คติประจำตระกูล / คำอธิบาย
+                  </label>
+                  <input
+                    type="text"
+                    value={motto}
+                    onChange={(e) => setMotto(e.target.value)}
+                    placeholder="เช่น รากฐานมั่นคง เชื่อมโยงสายใย จากรุ่นสู่รุ่น"
+                    className="w-full px-3 py-2 text-sm rounded-xl border border-[#DDD6CA] focus:outline-none focus:border-[#2E6254]"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  className="px-4 py-2 rounded-xl bg-[#2E6254] text-white text-xs font-medium hover:bg-[#234E42] transition-colors cursor-pointer"
+                >
+                  บันทึกชื่อตระกูล
+                </button>
+              </form>
 
-              {confirmMode === 'sample' && (
-                <div className="p-3.5 rounded-xl bg-[#FCEEEB] border border-[#ECC5BC] space-y-2.5">
-                  <p className="text-xs text-[#8E3224]">
-                    ยืนยันโหลดข้อมูลตัวอย่างตระกูล 4 รุ่น? ข้อมูลปัจจุบันจะถูกแทนที่
-                  </p>
-                  <div className="flex gap-2">
+              <div className="space-y-2.5 pt-4 border-t border-[#F0ECE4]">
+                <h4 className="text-xs font-semibold uppercase tracking-wide text-[#8C8477] flex items-center gap-1.5">
+                  <Shield className="w-3.5 h-3.5 text-[#B5653B]" />
+                  สร้างตระกูลใหม่ / รีเซ็ตข้อมูล (เฉพาะแอดมิน)
+                </h4>
+
+                {confirmMode === 'none' && (
+                  <div className="flex flex-wrap gap-2">
                     <button
                       type="button"
-                      onClick={() => {
-                        onResetSample();
-                        onClose();
-                      }}
-                      className="px-3.5 py-1.5 rounded-lg bg-[#B54735] text-white text-xs font-medium cursor-pointer"
+                      onClick={() => setConfirmMode('fresh')}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-[#DDD6CA] text-xs font-medium text-[#1C2B26] hover:bg-[#FAF8F4] cursor-pointer"
                     >
-                      ยืนยันโหลดตัวอย่าง
+                      <FilePlus2 className="w-3.5 h-3.5 text-[#2E6254]" />
+                      เริ่มสร้างผังตระกูลใหม่ (ล้างข้อมูลเดิม)
                     </button>
                     <button
                       type="button"
-                      onClick={() => setConfirmMode('none')}
-                      className="px-3.5 py-1.5 rounded-lg bg-white border border-[#DDD6CA] text-xs text-[#53615C] cursor-pointer"
+                      onClick={() => setConfirmMode('sample')}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-[#DDD6CA] text-xs font-medium text-[#53615C] hover:bg-[#FAF8F4] cursor-pointer"
                     >
-                      ยกเลิก
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      โหลดข้อมูลตัวอย่าง (ตระกูลกิตติวัฒนากุล)
                     </button>
                   </div>
+                )}
+
+                {confirmMode === 'fresh' && (
+                  <div className="p-3.5 rounded-xl bg-[#FAF8F4] border border-[#E5DFD5] space-y-2.5">
+                    <div className="text-xs font-medium text-[#1C2B26]">
+                      ตั้งชื่อตระกูลใหม่ของคุณ (ข้อมูลเดิมจะถูกแทนที่ สามารถสำรอง JSON ไว้ก่อนได้)
+                    </div>
+                    <input
+                      type="text"
+                      value={freshName}
+                      onChange={(e) => setFreshName(e.target.value)}
+                      placeholder="เช่น ตระกูล ศรีสุข"
+                      className="w-full px-3 py-1.5 text-sm rounded-xl border border-[#DDD6CA] bg-white focus:outline-none focus:border-[#2E6254]"
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onStartFresh(freshName.trim() || 'ผังตระกูลของฉัน');
+                          onClose();
+                        }}
+                        className="px-3.5 py-1.5 rounded-lg bg-[#2E6254] text-white text-xs font-medium cursor-pointer"
+                      >
+                        เริ่มสร้างตระกูลใหม่
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmMode('none')}
+                        className="px-3.5 py-1.5 rounded-lg bg-white border border-[#DDD6CA] text-xs text-[#53615C] cursor-pointer"
+                      >
+                        ยกเลิก
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {confirmMode === 'sample' && (
+                  <div className="p-3.5 rounded-xl bg-[#FCEEEB] border border-[#ECC5BC] space-y-2.5">
+                    <p className="text-xs text-[#8E3224]">
+                      ยืนยันโหลดข้อมูลตัวอย่างตระกูล 4 รุ่น? ข้อมูลปัจจุบันจะถูกแทนที่
+                    </p>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onResetSample();
+                          onClose();
+                        }}
+                        className="px-3.5 py-1.5 rounded-lg bg-[#B54735] text-white text-xs font-medium cursor-pointer"
+                      >
+                        ยืนยันโหลดตัวอย่าง
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmMode('none')}
+                        className="px-3.5 py-1.5 rounded-lg bg-white border border-[#DDD6CA] text-xs text-[#53615C] cursor-pointer"
+                      >
+                        ยกเลิก
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </>
+          ) : (
+            <div className="pt-4 border-t border-[#F0ECE4]">
+              <div className="p-4 rounded-xl bg-[#FAF8F4] border border-[#E5DFD5] flex items-center justify-between gap-3">
+                <div className="flex items-start gap-2.5">
+                  <Lock className="w-4 h-4 text-[#B5653B] mt-0.5 shrink-0" />
+                  <div>
+                    <div className="text-xs font-semibold text-[#1C2B26]">
+                      การเปลี่ยนชื่อตระกูล นำเข้าไฟล์ หรือสร้างตระกูลใหม่
+                    </div>
+                    <p className="text-[11px] text-[#7C8782] mt-0.5">
+                      สงวนสิทธิ์เฉพาะแอดมินเท่านั้น เพื่อป้องกันการกดล้างข้อมูลโดยไม่ได้ตั้งใจ
+                    </p>
+                  </div>
                 </div>
-              )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    onOpenAdminLogin();
+                  }}
+                  className="px-3 py-1.5 rounded-xl bg-[#2E6254] text-white text-xs font-medium hover:bg-[#234E42] shrink-0 cursor-pointer"
+                >
+                  เข้าสู่ระบบแอดมิน
+                </button>
+              </div>
             </div>
           )}
         </div>

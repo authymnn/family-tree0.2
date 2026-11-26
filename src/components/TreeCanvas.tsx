@@ -125,9 +125,23 @@ export const TreeCanvas = React.forwardRef<TreeCanvasHandle, TreeCanvasProps>(
     const containerRef = useRef<HTMLDivElement>(null);
     const [transform, setTransform] = useState({ x: 40, y: 30, scale: 0.92 });
     const [viewportSize, setViewportSize] = useState({ width: 1000, height: 650 });
-    const [isPanning, setIsPanning] = useState(false);
+    const [isInteracting, setIsInteracting] = useState(false);
+
+    // Multi-touch pointer tracking for 1-finger pan + 2-finger pinch-to-zoom on mobile!
+    const activePointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
     const panStartRef = useRef({ x: 0, y: 0, tx: 0, ty: 0 });
+    const pinchStartRef = useRef<{
+      dist: number;
+      midX: number;
+      midY: number;
+      scale: number;
+      tx: number;
+      ty: number;
+    } | null>(null);
+    const transformRef = useRef(transform);
+    transformRef.current = transform;
     const didDragRef = useRef(false);
+
     const [branchFilter, setBranchFilter] = useState<string>('ALL');
     const [hasInitialFit, setHasInitialFit] = useState(false);
     const [showMinimap, setShowMinimap] = useState(true);
@@ -176,7 +190,7 @@ export const TreeCanvas = React.forwardRef<TreeCanvasHandle, TreeCanvasProps>(
         const card = layout.cards.find((c) => c.person.id === personId);
         if (!container || !card) return;
         const rect = container.getBoundingClientRect();
-        const targetScale = Math.max(transform.scale, 0.95);
+        const targetScale = Math.max(transformRef.current.scale, 0.95);
         const cx = card.x + card.width / 2;
         const cy = card.y + card.height / 2;
         const centerOffsetX = !readOnly && rect.width > 960 ? -130 : 0;
@@ -186,7 +200,7 @@ export const TreeCanvas = React.forwardRef<TreeCanvasHandle, TreeCanvasProps>(
           scale: targetScale,
         });
       },
-      [layout.cards, transform.scale, readOnly]
+      [layout.cards, readOnly]
     );
 
     useImperativeHandle(ref, () => ({ focusPerson, fitToScreen }), [focusPerson, fitToScreen]);
@@ -217,7 +231,7 @@ export const TreeCanvas = React.forwardRef<TreeCanvasHandle, TreeCanvasProps>(
 
       setTransform((prev) => {
         const zoomFactor = e.deltaY < 0 ? 1.12 : 0.9;
-        const nextScale = Math.max(0.18, Math.min(2.4, prev.scale * zoomFactor));
+        const nextScale = Math.max(0.18, Math.min(2.6, prev.scale * zoomFactor));
         const ratio = nextScale / prev.scale;
         return {
           scale: nextScale,
@@ -228,35 +242,117 @@ export const TreeCanvas = React.forwardRef<TreeCanvasHandle, TreeCanvasProps>(
     }, []);
 
     const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-      if ((e.target as HTMLElement).closest('[data-card-interactive="true"]')) return;
-      if (e.button !== 0) return;
-      setIsPanning(true);
-      didDragRef.current = false;
-      panStartRef.current = {
-        x: e.clientX,
-        y: e.clientY,
-        tx: transform.x,
-        ty: transform.y,
-      };
-      (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+      // On desktop mouse, skip pan if clicking directly on an interactive card/button
+      // On mobile touch, ALWAYS track pointers so 2-finger pinch works even when fingers land on cards!
+      const isTouch = e.pointerType === 'touch';
+      if (!isTouch && (e.target as HTMLElement).closest('[data-card-interactive="true"]')) return;
+      if (!isTouch && e.button !== 0) return;
+
+      activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+      if (activePointersRef.current.size === 1) {
+        didDragRef.current = false;
+        panStartRef.current = {
+          x: e.clientX,
+          y: e.clientY,
+          tx: transformRef.current.x,
+          ty: transformRef.current.y,
+        };
+        pinchStartRef.current = null;
+        if (!isTouch) {
+          setIsInteracting(true);
+          try {
+            (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+          } catch {
+            // ignore
+          }
+        }
+      } else if (activePointersRef.current.size === 2) {
+        // Begin 2-finger pinch-to-zoom!
+        didDragRef.current = true;
+        setIsInteracting(true);
+        const pts = Array.from(activePointersRef.current.values());
+        const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
+        const container = containerRef.current;
+        const rect = container?.getBoundingClientRect();
+        const midX = (pts[0].x + pts[1].x) / 2 - (rect?.left ?? 0);
+        const midY = (pts[0].y + pts[1].y) / 2 - (rect?.top ?? 0);
+        pinchStartRef.current = {
+          dist: Math.max(10, dist),
+          midX,
+          midY,
+          scale: transformRef.current.scale,
+          tx: transformRef.current.x,
+          ty: transformRef.current.y,
+        };
+      }
     };
 
     const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-      if (!isPanning) return;
-      const dx = e.clientX - panStartRef.current.x;
-      const dy = e.clientY - panStartRef.current.y;
-      if (Math.abs(dx) > 4 || Math.abs(dy) > 4) {
+      if (!activePointersRef.current.has(e.pointerId)) return;
+      activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+      if (activePointersRef.current.size >= 2 && pinchStartRef.current) {
+        const pts = Array.from(activePointersRef.current.values());
+        const newDist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
+        const container = containerRef.current;
+        const rect = container?.getBoundingClientRect();
+        const newMidX = (pts[0].x + pts[1].x) / 2 - (rect?.left ?? 0);
+        const newMidY = (pts[0].y + pts[1].y) / 2 - (rect?.top ?? 0);
+
+        const start = pinchStartRef.current;
+        const nextScale = Math.max(0.18, Math.min(2.6, start.scale * (newDist / start.dist)));
+        const ratio = nextScale / start.scale;
+
+        // Zoom smoothly centered right between the two fingers + follow midpoint pan
+        const nextX = newMidX - (start.midX - start.tx) * ratio;
+        const nextY = newMidY - (start.midY - start.ty) * ratio;
+
         didDragRef.current = true;
+        setTransform({ x: nextX, y: nextY, scale: nextScale });
+      } else if (activePointersRef.current.size === 1) {
+        const dx = e.clientX - panStartRef.current.x;
+        const dy = e.clientY - panStartRef.current.y;
+        if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
+          didDragRef.current = true;
+          if (!isInteracting) setIsInteracting(true);
+        }
+        if (didDragRef.current || e.pointerType !== 'touch') {
+          setTransform((prev) => ({
+            ...prev,
+            x: panStartRef.current.tx + dx,
+            y: panStartRef.current.ty + dy,
+          }));
+        }
       }
-      setTransform((prev) => ({
-        ...prev,
-        x: panStartRef.current.tx + dx,
-        y: panStartRef.current.ty + dy,
-      }));
     };
 
-    const handlePointerUp = () => {
-      setIsPanning(false);
+    const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+      activePointersRef.current.delete(e.pointerId);
+
+      if (activePointersRef.current.size === 1) {
+        // Transition smoothly from 2-finger pinch back to 1-finger pan without jumping
+        const remaining = Array.from(activePointersRef.current.values())[0];
+        pinchStartRef.current = null;
+        panStartRef.current = {
+          x: remaining.x,
+          y: remaining.y,
+          tx: transformRef.current.x,
+          ty: transformRef.current.y,
+        };
+      } else if (activePointersRef.current.size === 0) {
+        pinchStartRef.current = null;
+        setIsInteracting(false);
+        // Reset drag flag shortly after pointer release so normal taps work immediately
+        setTimeout(() => {
+          didDragRef.current = false;
+        }, 60);
+      }
+    };
+
+    const handleSafeCardClick = (personId: string) => {
+      if (didDragRef.current) return;
+      onSelectPerson(personId);
     };
 
     const zoomBy = (factor: number) => {

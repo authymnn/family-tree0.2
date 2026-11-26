@@ -85,7 +85,27 @@ import { PersonAvatar } from './components/PersonAvatar';
 const STORAGE_KEY = 'thai_family_tree_v1';
 const LOCAL_ACCESS_KEY = 'thai_family_tree_local_access_v1';
 const SESSION_PINS_KEY = 'thai_family_tree_session_pins_v1';
+const VIEW_PREFS_KEY = 'thai_family_tree_view_prefs_v1';
 const MAX_HISTORY = 40;
+
+function loadViewPrefs(): { cardStyle: CardStyle; orientation: TreeOrientation } {
+  try {
+    const raw = localStorage.getItem(VIEW_PREFS_KEY);
+    if (raw) {
+      const p = JSON.parse(raw) as Partial<{ cardStyle: CardStyle; orientation: TreeOrientation }>;
+      const validStyle: CardStyle =
+        p.cardStyle === 'compact' || p.cardStyle === 'photo-only' ? p.cardStyle : 'detailed';
+      const validOrientation: TreeOrientation =
+        p.orientation === 'bottom-up' || p.orientation === 'left-right'
+          ? p.orientation
+          : 'top-down';
+      return { cardStyle: validStyle, orientation: validOrientation };
+    }
+  } catch {
+    // ignore
+  }
+  return { cardStyle: 'detailed', orientation: 'top-down' };
+}
 
 const DEFAULT_LOCAL_ACCESS: LocalAccessConfig = {
   viewMode: 'public',
@@ -201,10 +221,19 @@ export const App: React.FC = () => {
   const [view, setView] = useState<ViewMode>('tree');
   const [simpleMode, setSimpleMode] = useState(false);
   const [selectedPersonId, setSelectedPersonId] = useState<string | null>(null);
-  const [cardStyle, setCardStyle] = useState<CardStyle>('detailed');
-  const [orientation, setOrientation] = useState<TreeOrientation>('top-down');
+  const [cardStyle, setCardStyle] = useState<CardStyle>(() => loadViewPrefs().cardStyle);
+  const [orientation, setOrientation] = useState<TreeOrientation>(() => loadViewPrefs().orientation);
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(() => new Set());
   const [focusRootId, setFocusRootId] = useState<string | null>(null);
+
+  // Save cardStyle & orientation strictly per-device (never synced across family devices)
+  useEffect(() => {
+    try {
+      localStorage.setItem(VIEW_PREFS_KEY, JSON.stringify({ cardStyle, orientation }));
+    } catch {
+      // ignore
+    }
+  }, [cardStyle, orientation]);
 
   const [lineageAnchorId, setLineageAnchorId] = useState<string | null>(null);
   const [customHighlight, setCustomHighlight] = useState<{
@@ -321,10 +350,6 @@ export const App: React.FC = () => {
           suppressNextCloudSaveRef.current = true;
           setData(valid);
         }
-        if (res.theme_settings) {
-          suppressNextCloudSaveRef.current = true;
-          setThemeSettings((prev) => ({ ...prev, ...res.theme_settings }));
-        }
       }
 
       cloudInitializedRef.current = true;
@@ -353,7 +378,7 @@ export const App: React.FC = () => {
     return () => unsubscribe();
   }, [pullFromCloud, showToast]);
 
-  // Debounced Auto-Save to Supabase Cloud whenever data or theme changes
+  // Debounced Auto-Save to Supabase Cloud whenever family data changes (theme & view prefs remain per-device!)
   useEffect(() => {
     if (!isSupabaseConfigured) return;
     if (!cloudInitializedRef.current) return;
@@ -370,7 +395,6 @@ export const App: React.FC = () => {
     saveTimerRef.current = window.setTimeout(async () => {
       const res = await saveCloudFamilyTree({
         treeData: data,
-        themeSettings,
         editPin: sessionPins.editPin,
         adminPin: sessionPins.adminPin,
         editorName: access.isAdmin ? 'admin' : 'family_member',
@@ -392,7 +416,6 @@ export const App: React.FC = () => {
     };
   }, [
     data,
-    themeSettings,
     access.canEdit,
     access.viewLocked,
     access.isAdmin,
@@ -577,7 +600,6 @@ export const App: React.FC = () => {
     // Ensure tree exists on Cloud first before updating access rules
     const pushFirst = await saveCloudFamilyTree({
       treeData: data,
-      themeSettings,
       adminPin: sessionPins.adminPin,
       editorName: 'admin',
     });
@@ -609,7 +631,6 @@ export const App: React.FC = () => {
     setCloudStatus('saving');
     const res = await saveCloudFamilyTree({
       treeData: data,
-      themeSettings,
       editPin: sessionPins.editPin,
       adminPin: sessionPins.adminPin,
       editorName: access.isAdmin ? 'admin' : 'family_member',
@@ -1315,9 +1336,14 @@ export const App: React.FC = () => {
       {showSettings && (
         <ClanSettingsModal
           data={data}
-          canEdit={access.canEdit}
+          isAdmin={access.isAdmin}
           onClose={() => setShowSettings(false)}
+          onOpenAdminLogin={() => setShowAdminModal(true)}
           onUpdateClanInfo={(clanName, motto) => {
+            if (!access.isAdmin) {
+              showToast('เฉพาะแอดมินเท่านั้นที่เปลี่ยนชื่อตระกูลได้', 'error');
+              return;
+            }
             commitChange({
               ...data,
               clanName,
@@ -1326,6 +1352,10 @@ export const App: React.FC = () => {
             });
           }}
           onImportData={(imported) => {
+            if (!access.isAdmin) {
+              showToast('เฉพาะแอดมินเท่านั้นที่นำเข้าไฟล์ได้', 'error');
+              return;
+            }
             commitChange(imported);
             setSelectedPersonId(null);
             setFocusRootId(null);
@@ -1339,6 +1369,10 @@ export const App: React.FC = () => {
             exportTreeAsPng(data, { cardStyle, orientation, collapsedIds, focusRootId, palette })
           }
           onResetSample={() => {
+            if (!access.isAdmin) {
+              showToast('เฉพาะแอดมินเท่านั้นที่รีเซ็ตข้อมูลได้', 'error');
+              return;
+            }
             commitChange(createSampleFamilyTree());
             setSelectedPersonId(null);
             setFocusRootId(null);
@@ -1349,6 +1383,10 @@ export const App: React.FC = () => {
             setTimeout(() => treeCanvasRef.current?.fitToScreen(), 120);
           }}
           onStartFresh={(newClanName) => {
+            if (!access.isAdmin) {
+              showToast('เฉพาะแอดมินเท่านั้นที่สร้างตระกูลใหม่ได้', 'error');
+              return;
+            }
             const fresh = createEmptyFamilyTree(newClanName);
             commitChange(fresh);
             setSelectedPersonId(fresh.rootPersonId ?? null);

@@ -1,4 +1,4 @@
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { createClient, RealtimeChannel, SupabaseClient } from '@supabase/supabase-js';
 import { FamilyTreeData, ThemeSettings } from '../types/family';
 import { EditAccessMode, ViewAccessMode } from '../types/access';
 
@@ -9,7 +9,6 @@ function sanitizeEnvValue(raw: string | undefined, expectedKeyPrefix: string): s
   if (val.startsWith(prefix)) {
     val = val.slice(prefix.length).trim();
   }
-  // Strip accidental surrounding quotes
   if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
     val = val.slice(1, -1).trim();
   }
@@ -37,11 +36,22 @@ export const isSupabaseConfigured = Boolean(hasValidUrl && SUPABASE_ANON_KEY);
 export const supabase: SupabaseClient | null = (() => {
   if (!isSupabaseConfigured) return null;
   try {
-    return createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    return createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      realtime: {
+        params: {
+          eventsPerSecond: 10,
+        },
+      },
+    });
   } catch {
     return null;
   }
 })();
+
+// Unique per-browser-tab identifier to prevent echoing our own saves
+export const CLIENT_INSTANCE_ID = `tab_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+
+let activeSyncChannel: RealtimeChannel | null = null;
 
 export interface FetchCloudTreeResponse {
   ok: boolean;
@@ -57,6 +67,27 @@ export interface FetchCloudTreeResponse {
   updated_at?: string;
   updated_by?: string;
   error?: string;
+}
+
+export async function fetchCloudTreeStatus(): Promise<{
+  exists?: boolean;
+  updated_at?: string;
+  updated_by?: string;
+  view_mode?: ViewAccessMode;
+  edit_mode?: EditAccessMode;
+} | null> {
+  if (!supabase) return null;
+  const { data, error } = await supabase.rpc('get_family_tree_status', {
+    p_tree_id: FAMILY_TREE_ID,
+  });
+  if (error || !data) return null;
+  return data as {
+    exists?: boolean;
+    updated_at?: string;
+    updated_by?: string;
+    view_mode?: ViewAccessMode;
+    edit_mode?: EditAccessMode;
+  };
 }
 
 export async function fetchCloudFamilyTree(params: {
@@ -105,7 +136,14 @@ export async function saveCloudFamilyTree(params: {
   if (error) {
     return { ok: false, error: error.message };
   }
-  return data as { ok: boolean; updated_at?: string; error?: string };
+  const result = data as { ok: boolean; updated_at?: string; error?: string };
+  if (result.ok) {
+    broadcastCloudSync({
+      updated_at: result.updated_at,
+      updated_by: params.editorName ?? 'family_member',
+    });
+  }
+  return result;
 }
 
 export async function updateCloudAccessSettings(params: {
@@ -131,18 +169,70 @@ export async function updateCloudAccessSettings(params: {
   if (error) {
     return { ok: false, error: error.message };
   }
-  return data as { ok: boolean; error?: string };
+  const result = data as { ok: boolean; error?: string };
+  if (result.ok) {
+    broadcastCloudSync({
+      updated_at: new Date().toISOString(),
+      updated_by: 'admin_access_change',
+    });
+  }
+  return result;
 }
 
 /**
- * Subscribe to real-time sync pings whenever another family member saves or admin changes lock state.
+ * Send an ultra-fast (~50ms) Realtime Broadcast ping to all other connected family devices.
+ */
+export function broadcastCloudSync(payload: {
+  updated_at?: string;
+  updated_by?: string;
+}): void {
+  if (!activeSyncChannel) return;
+  activeSyncChannel
+    .send({
+      type: 'broadcast',
+      event: 'tree_updated',
+      payload: {
+        ...payload,
+        client_id: CLIENT_INSTANCE_ID,
+      },
+    })
+    .catch(() => {
+      // ignore transient send issues; postgres_changes + polling cover fallback
+    });
+}
+
+/**
+ * Subscribe to real-time sync via BOTH:
+ * 1) Instant Realtime Broadcast (~50ms latency across all devices)
+ * 2) Postgres Changes on `family_tree_sync` (database-level durability)
  */
 export function subscribeToCloudSync(
-  onSyncPing: (payload: { updated_at?: string; updated_by?: string }) => void
+  onSyncPing: (payload: {
+    updated_at?: string;
+    updated_by?: string;
+    client_id?: string;
+    source: 'broadcast' | 'postgres';
+  }) => void,
+  onRealtimeStateChange?: (connected: boolean) => void
 ): () => void {
   if (!supabase) return () => {};
+
   const channel = supabase
-    .channel(`family_tree_sync_${FAMILY_TREE_ID}`)
+    .channel(`family_tree_live_${FAMILY_TREE_ID}`, {
+      config: {
+        broadcast: { self: false },
+      },
+    })
+    .on('broadcast', { event: 'tree_updated' }, ({ payload }) => {
+      const p = payload as { updated_at?: string; updated_by?: string; client_id?: string } | undefined;
+      if (p?.client_id === CLIENT_INSTANCE_ID) return;
+      onSyncPing({
+        updated_at: p?.updated_at,
+        updated_by: p?.updated_by,
+        client_id: p?.client_id,
+        source: 'broadcast',
+      });
+    })
     .on(
       'postgres_changes',
       {
@@ -153,12 +243,23 @@ export function subscribeToCloudSync(
       },
       (payload) => {
         const rec = payload.new as { updated_at?: string; updated_by?: string } | undefined;
-        onSyncPing({ updated_at: rec?.updated_at, updated_by: rec?.updated_by });
+        onSyncPing({
+          updated_at: rec?.updated_at,
+          updated_by: rec?.updated_by,
+          source: 'postgres',
+        });
       }
     )
-    .subscribe();
+    .subscribe((status) => {
+      onRealtimeStateChange?.(status === 'SUBSCRIBED');
+    });
+
+  activeSyncChannel = channel;
 
   return () => {
+    if (activeSyncChannel === channel) {
+      activeSyncChannel = null;
+    }
     supabase.removeChannel(channel);
   };
 }
@@ -188,7 +289,6 @@ export async function uploadDataUrlToStorage(
       });
 
     if (error) {
-      // Fallback to inline compressed Data URL if storage bucket isn't created yet
       return dataUrl;
     }
 
