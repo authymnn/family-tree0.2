@@ -1,0 +1,174 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-sans: 'Noto Sans Thai', 'Inter', system-ui, -apple-system, sans-serif;
+    --font-serif: 'Noto Serif Thai', Georgia, serif;
+
+    /* Default theme tokens (updated dynamically by src/utils/themes.ts) */
+    --theme-primary: #2E6254;
+    --theme-primary-hover: #234E42;
+    --theme-primary-soft: #E3EFEA;
+    --theme-accent: #B5653B;
+    --theme-accent-soft: #F8E7DE;
+    --theme-bg-app: #FAF8F4;
+    --theme-bg-canvas: #F6F3EC;
+    --theme-canvas-dot: #D8D1C5;
+    --theme-bg-surface: #FFFFFF;
+    --theme-bg-subtle: #F4F0E8;
+    --theme-border: #E5DFD5;
+    --theme-text-main: #1C2B26;
+    --theme-text-muted: #64716C;
+    --theme-connector: #B9AFA0;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background-color: var(--theme-bg-app);
+    color: var(--theme-text-main);
+    overflow: hidden;
+  }
+}
+
+.font-serif-thai {
+  font-family: var(--font-serif);
+}
+
+/* Theme utility helpers */
+.theme-app-bg {
+  background-color: var(--theme-bg-app);
+  color: var(--theme-text-main);
+}
+
+.theme-surface {
+  background-color: var(--theme-bg-surface);
+  border-color: var(--theme-border);
+  color: var(--theme-text-main);
+}
+
+.theme-subtle {
+  background-color: var(--theme-bg-subtle);
+  border-color: var(--theme-border);
+}
+
+.theme-primary-btn {
+  background-color: var(--theme-primary);
+  color: #ffffff;
+}
+.theme-primary-btn:hover {
+  background-color: var(--theme-primary-hover);
+}
+
+.theme-accent-btn {
+  background-color: var(--theme-accent);
+  color: #ffffff;
+}
+
+.theme-primary-text {
+  color: var(--theme-primary);
+}
+
+.theme-accent-text {
+  color: var(--theme-accent);
+}
+
+.theme-muted-text {
+  color: var(--theme-text-muted);
+}
+
+/* Canvas dot grid */
+.tree-canvas-dots {
+  background-image: radial-gradient(var(--theme-canvas-dot) 1.2px, transparent 1.2px);
+  background-size: 24px 24px;
+}
+
+/* Harmonize secondary tabs seamlessly when Dark Theme ("ราตรีทอง") is selected */
+[data-theme-mode="dark"] .bg-\[\#FAF8F4\] {
+  background-color: var(--theme-bg-app);
+}
+[data-theme-mode="dark"] .bg-white {
+  background-color: var(--theme-bg-surface);
+}
+[data-theme-mode="dark"] .border-\[\#E5DFD5\],
+[data-theme-mode="dark"] .border-\[\#EAE4DA\],
+[data-theme-mode="dark"] .border-\[\#DDD6CA\],
+[data-theme-mode="dark"] .border-\[\#F0ECE4\],
+[data-theme-mode="dark"] .border-\[\#F3EFE8\] {
+  border-color: var(--theme-border);
+}
+[data-theme-mode="dark"] .text-\[\#1C2B26\],
+[data-theme-mode="dark"] .text-\[\#31403B\],
+[data-theme-mode="dark"] .text-\[\#465550\] {
+  color: var(--theme-text-main);
+}
+[data-theme-mode="dark"] .text-\[\#64716C\],
+[data-theme-mode="dark"] .text-\[\#53615C\],
+[data-theme-mode="dark"] .text-\[\#7C8782\] {
+  color: var(--theme-text-muted);
+}
+[data-theme-mode="dark"] .bg-\[\#F2EEE7\],
+[data-theme-mode="dark"] .bg-\[\#E9F2EE\] {
+  background-color: var(--theme-bg-subtle);
+}
+[data-theme-mode="dark"] .bg-\[\#2E6254\] {
+  background-color: var(--theme-primary);
+}
+[data-theme-mode="dark"] .bg-\[\#B5653B\] {
+  background-color: var(--theme-accent);
+}
+[data-theme-mode="dark"] .text-\[\#2E6254\],
+[data-theme-mode="dark"] .text-\[\#225144\] {
+  color: var(--theme-primary);
+}
+[data-theme-mode="dark"] .text-\[\#B5653B\] {
+  color: var(--theme-accent);
+}
+[data-theme-mode="dark"] .divide-\[\#F3EFE8\] > :not(:last-child) {
+  border-color: var(--theme-border);
+}
+
+/* Custom subtle scrollbars */
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--theme-border);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--theme-connector);
+}
+
+@keyframes slideInRight {
+  from {
+    transform: translateX(24px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.animate-slide-in-right {
+  animation: slideInRight 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.16s ease-out;
+}
