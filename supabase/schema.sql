@@ -153,16 +153,50 @@ begin
 end;
 $$;
 
+-- 2b. ตารางเก็บประวัติสำรองข้อมูลอัตโนมัติทุกครั้งที่มีการบันทึก (กู้คืนย้อนหลังได้ตลอด!)
+create table if not exists public.family_tree_history (
+  id bigserial primary key,
+  tree_id text not null references public.family_trees(id) on delete cascade,
+  tree_data jsonb not null,
+  member_count integer not null default 0,
+  updated_by text,
+  saved_at timestamptz not null default now()
+);
+
+create index if not exists idx_family_tree_history_tree_saved
+  on public.family_tree_history (tree_id, saved_at desc);
+
+alter table public.family_tree_history enable row level security;
+
+-- ฟังก์ชันช่วยนับจำนวนสมาชิกใน JSON อย่างปลอดภัย
+create or replace function public.count_tree_members(p_tree_data jsonb)
+returns integer
+language sql
+immutable
+as $$
+  select case
+    when p_tree_data is not null and jsonb_typeof(p_tree_data->'members') = 'object' then
+      (select count(*)::integer from jsonb_object_keys(p_tree_data->'members'))
+    else 0
+  end;
+$$;
+
 -- ============================================================================
--- RPC 3: บันทึกข้อมูลผังตระกูล (ตรวจสิทธิ์ล็อก/ปลดล็อกบน Server ทุกครั้ง)
+-- RPC 3: บันทึกข้อมูลผังตระกูล (พร้อมเกราะป้องกันข้อมูลทับกัน + เก็บประวัติอัตโนมัติ!)
 -- ============================================================================
+-- ลบ signature เก่าก่อนเพื่อป้องกันการเรียกข้ามเกราะป้องกันจากแท็บเก่าที่ค้างอยู่
+drop function if exists public.save_family_tree(text, jsonb, jsonb, text, text, text);
+drop function if exists public.save_family_tree(text, jsonb, jsonb, text, text, text, timestamptz, boolean);
+
 create or replace function public.save_family_tree(
   p_tree_id text,
   p_tree_data jsonb,
   p_theme_settings jsonb default null,
   p_edit_pin text default '',
   p_admin_pin text default '',
-  p_editor_name text default null
+  p_editor_name text default null,
+  p_expected_updated_at timestamptz default null,
+  p_force_overwrite boolean default false
 )
 returns jsonb
 language plpgsql
@@ -173,8 +207,10 @@ declare
   v_row public.family_trees%rowtype;
   v_is_admin boolean := false;
   v_now timestamptz := now();
+  v_old_count integer := 0;
+  v_new_count integer := 0;
 begin
-  select * into v_row from public.family_trees where id = p_tree_id;
+  select * into v_row from public.family_trees where id = p_tree_id for update;
 
   if not found then
     insert into public.family_trees (id, tree_data, theme_settings, updated_by, updated_at)
@@ -204,6 +240,54 @@ begin
       );
     end if;
   end if;
+
+  v_old_count := public.count_tree_members(v_row.tree_data);
+  v_new_count := public.count_tree_members(p_tree_data);
+
+  -- เกราะป้องกันชั้นที่ 1–3 (ยกเว้นกรณีแอดมินสั่งเขียนทับโดยตั้งใจ เช่น นำเข้าไฟล์/กู้คืน)
+  if not (v_is_admin and coalesce(p_force_overwrite, false)) then
+    -- 1) บล็อกแท็บเว็บเวอร์ชันเก่าที่ค้างไว้ (ไม่ได้ส่งเวลาอ้างอิง p_expected_updated_at)
+    if p_expected_updated_at is null and v_old_count > 0 then
+      return jsonb_build_object(
+        'ok', false,
+        'stale_client', true,
+        'error', 'หน้าเว็บนี้เป็นเวอร์ชันเก่า กรุณากดรีเฟรชหน้าเว็บใหม่ก่อนแก้ไข เพื่อป้องกันข้อมูลทับกัน'
+      );
+    end if;
+
+    -- 2) ตรวจการแก้ไขชนกันระดับเสี้ยววินาที (Optimistic Concurrency Control)
+    if p_expected_updated_at is not null
+       and abs(extract(epoch from (v_row.updated_at - p_expected_updated_at))) > 0.5 then
+      return jsonb_build_object(
+        'ok', false,
+        'conflict', true,
+        'server_updated_at', v_row.updated_at,
+        'error', 'มีญาติเพิ่งบันทึกข้อมูลพร้อมกัน ระบบกำลังผสานข้อมูลให้อัตโนมัติ'
+      );
+    end if;
+
+    -- 3) ป้องกันการลบหรือทำข้อมูลหายทีละหลายคนโดยไม่ตั้งใจ (ลดลงเกิน 2 คนพร้อมกัน)
+    if v_old_count >= 5 and v_new_count < v_old_count - 2 then
+      return jsonb_build_object(
+        'ok', false,
+        'error', 'ระบบป้องกันข้อมูลหาย: ไม่อนุญาตให้ลดจำนวนสมาชิกทีละหลายคนพร้อมกัน (ต้องทำผ่านสิทธิ์แอดมินเท่านั้น)'
+      );
+    end if;
+  end if;
+
+  -- บันทึกสำเนาเวอร์ชันก่อนหน้าเก็บไว้ในตารางประวัติอัตโนมัติ (ก่อนเขียนทับทุกครั้ง!)
+  insert into public.family_tree_history (tree_id, tree_data, member_count, updated_by, saved_at)
+  values (p_tree_id, v_row.tree_data, v_old_count, v_row.updated_by, v_row.updated_at);
+
+  -- เก็บประวัติย้อนหลังล่าสุดไว้ 80 เวอร์ชันต่อผังตระกูล
+  delete from public.family_tree_history
+  where tree_id = p_tree_id
+    and id not in (
+      select id from public.family_tree_history
+      where tree_id = p_tree_id
+      order by saved_at desc, id desc
+      limit 80
+    );
 
   update public.family_trees
   set
@@ -281,11 +365,131 @@ begin
 end;
 $$;
 
--- อนุญาตให้ Client (anon / authenticated) เรียกใช้เฉพาะ RPC ทั้ง 4 ฟังก์ชันนี้
+-- ============================================================================
+-- RPC 5: แอดมิน — ดูรายการประวัติสำรองข้อมูลย้อนหลัง (Version History)
+-- ============================================================================
+create or replace function public.get_family_tree_history(
+  p_tree_id text,
+  p_admin_pin text,
+  p_limit integer default 40
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_row public.family_trees%rowtype;
+  v_items jsonb;
+begin
+  select * into v_row from public.family_trees where id = p_tree_id;
+  if not found then
+    return jsonb_build_object('ok', true, 'items', '[]'::jsonb);
+  end if;
+
+  if coalesce(p_admin_pin, '') <> v_row.admin_pin then
+    return jsonb_build_object('ok', false, 'error', 'รหัสผ่านแอดมินไม่ถูกต้อง');
+  end if;
+
+  select coalesce(
+    jsonb_agg(
+      jsonb_build_object(
+        'id', h.id,
+        'member_count', h.member_count,
+        'clan_name', coalesce(h.tree_data->>'clanName', 'ผังตระกูล'),
+        'updated_by', h.updated_by,
+        'saved_at', h.saved_at
+      )
+      order by h.saved_at desc, h.id desc
+    ),
+    '[]'::jsonb
+  )
+  into v_items
+  from (
+    select id, tree_data, member_count, updated_by, saved_at
+    from public.family_tree_history
+    where tree_id = p_tree_id
+    order by saved_at desc, id desc
+    limit greatest(1, least(coalesce(p_limit, 40), 80))
+  ) h;
+
+  return jsonb_build_object('ok', true, 'items', v_items);
+end;
+$$;
+
+-- ============================================================================
+-- RPC 6: แอดมิน — กู้คืนข้อมูลย้อนหลัง 1 คลิก (พร้อมสำรองข้อมูลปัจจุบันเก็บไว้ก่อน)
+-- ============================================================================
+create or replace function public.restore_family_tree_version(
+  p_tree_id text,
+  p_admin_pin text,
+  p_history_id bigint
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_row public.family_trees%rowtype;
+  v_hist public.family_tree_history%rowtype;
+  v_now timestamptz := now();
+begin
+  select * into v_row from public.family_trees where id = p_tree_id for update;
+  if not found then
+    return jsonb_build_object('ok', false, 'error', 'ไม่พบข้อมูลผังตระกูล');
+  end if;
+
+  if coalesce(p_admin_pin, '') <> v_row.admin_pin then
+    return jsonb_build_object('ok', false, 'error', 'รหัสผ่านแอดมินไม่ถูกต้อง');
+  end if;
+
+  select * into v_hist
+  from public.family_tree_history
+  where id = p_history_id and tree_id = p_tree_id;
+
+  if not found then
+    return jsonb_build_object('ok', false, 'error', 'ไม่พบเวอร์ชันประวัติที่เลือก');
+  end if;
+
+  -- สำรองข้อมูลปัจจุบันเก็บไว้ในประวัติก่อนกู้คืน (สามารถย้อนกลับมาได้เสมอ!)
+  insert into public.family_tree_history (tree_id, tree_data, member_count, updated_by, saved_at)
+  values (
+    p_tree_id,
+    v_row.tree_data,
+    public.count_tree_members(v_row.tree_data),
+    coalesce(v_row.updated_by, 'ก่อนการกู้คืน'),
+    v_row.updated_at
+  );
+
+  update public.family_trees
+  set
+    tree_data = v_hist.tree_data,
+    updated_by = 'แอดมินกู้คืนข้อมูลย้อนหลัง',
+    updated_at = v_now
+  where id = p_tree_id;
+
+  insert into public.family_tree_sync (tree_id, updated_by, updated_at)
+  values (p_tree_id, 'แอดมินกู้คืนข้อมูลย้อนหลัง', v_now)
+  on conflict (tree_id) do update
+    set updated_by = excluded.updated_by,
+        updated_at = excluded.updated_at;
+
+  return jsonb_build_object(
+    'ok', true,
+    'updated_at', v_now,
+    'restored_member_count', v_hist.member_count
+  );
+end;
+$$;
+
+-- อนุญาตให้ Client (anon / authenticated) เรียกใช้เฉพาะ RPC ทั้ง 6 ฟังก์ชันนี้
 grant execute on function public.get_family_tree_status(text) to anon, authenticated;
 grant execute on function public.get_family_tree(text, text, text, text) to anon, authenticated;
-grant execute on function public.save_family_tree(text, jsonb, jsonb, text, text, text) to anon, authenticated;
+grant execute on function public.save_family_tree(text, jsonb, jsonb, text, text, text, timestamptz, boolean) to anon, authenticated;
 grant execute on function public.update_tree_access_settings(text, text, text, text, text, text, text) to anon, authenticated;
+grant execute on function public.get_family_tree_history(text, text, integer) to anon, authenticated;
+grant execute on function public.restore_family_tree_version(text, text, bigint) to anon, authenticated;
 
 -- ============================================================================
 -- 5. Storage Bucket สำหรับเก็บรูปโปรไฟล์และอัลบั้มภาพครอบครัว (จุรูปได้เยอะมาก!)

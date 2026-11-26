@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   X,
   Shield,
@@ -16,10 +16,12 @@ import {
   UploadCloud,
   MonitorSmartphone,
   Send,
+  History,
+  RotateCcw,
 } from 'lucide-react';
 import { AccessState, CloudSyncStatus, EditAccessMode, ViewAccessMode } from '../types/access';
 import { ThemePalette } from '../utils/themes';
-import { FAMILY_TREE_ID, isSupabaseConfigured } from '../lib/supabase';
+import { CloudHistoryItem, FAMILY_TREE_ID, isSupabaseConfigured } from '../lib/supabase';
 
 interface AdminAccessModalProps {
   access: AccessState;
@@ -41,6 +43,13 @@ interface AdminAccessModalProps {
   onPushDisplayPresetToAll: () => Promise<{ ok: boolean; error?: string }>;
   onManualSyncPull: () => Promise<void>;
   onManualSyncPush: () => Promise<void>;
+  onLoadHistory?: () => Promise<{
+    ok: boolean;
+    items: CloudHistoryItem[];
+    needsSqlUpgrade?: boolean;
+    error?: string;
+  }>;
+  onRestoreHistoryVersion?: (historyId: number) => Promise<{ ok: boolean; error?: string }>;
 }
 
 export const AdminAccessModal: React.FC<AdminAccessModalProps> = ({
@@ -57,6 +66,8 @@ export const AdminAccessModal: React.FC<AdminAccessModalProps> = ({
   onPushDisplayPresetToAll,
   onManualSyncPull,
   onManualSyncPush,
+  onLoadHistory,
+  onRestoreHistoryVersion,
 }) => {
   const [adminPinInput, setAdminPinInput] = useState('');
   const [editPinInput, setEditPinInput] = useState('');
@@ -69,6 +80,32 @@ export const AdminAccessModal: React.FC<AdminAccessModalProps> = ({
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
+
+  // Version History state (Admin-only)
+  const [historyItems, setHistoryItems] = useState<CloudHistoryItem[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState('');
+  const [confirmRestoreId, setConfirmRestoreId] = useState<number | null>(null);
+
+  const loadHistoryList = async () => {
+    if (!onLoadHistory || !isSupabaseConfigured) return;
+    setHistoryLoading(true);
+    setHistoryError('');
+    const res = await onLoadHistory();
+    setHistoryLoading(false);
+    if (res.ok) {
+      setHistoryItems(res.items);
+    } else {
+      setHistoryError(res.error || 'ไม่สามารถโหลดประวัติสำรองข้อมูลได้');
+    }
+  };
+
+  useEffect(() => {
+    if (access.isAdmin && isSupabaseConfigured && onLoadHistory) {
+      loadHistoryList();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [access.isAdmin]);
 
   const handleAdminLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -515,7 +552,151 @@ export const AdminAccessModal: React.FC<AdminAccessModalProps> = ({
                 </button>
               </div>
 
-              {/* 4. Optional Change Admin PIN */}
+              {/* 4. Server Protection & Automatic Version History (1-Click Restore!) */}
+              {isSupabaseConfigured && (
+                <div
+                  style={{ backgroundColor: palette.bgSubtle, borderColor: palette.border }}
+                  className="p-4 rounded-xl border space-y-3"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-start gap-2 min-w-0">
+                      <History className="w-4 h-4 mt-0.5 shrink-0" style={{ color: palette.primary }} />
+                      <div>
+                        <div className="text-xs font-bold">
+                          4. เกราะป้องกันข้อมูล & ประวัติย้อนหลัง (กู้คืนได้ 80 เวอร์ชัน)
+                        </div>
+                        <p style={{ color: palette.textMuted }} className="text-[11px] mt-0.5 leading-relaxed">
+                          ทุกครั้งที่มีการแก้ไข ระบบจะสำรองข้อมูลก่อนหน้าไว้บน Cloud อัตโนมัติ และบล็อกเครื่องที่เปิดหน้าเว็บเก่าค้างไว้ไม่ให้เขียนทับข้อมูล
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={historyLoading}
+                      onClick={loadHistoryList}
+                      style={{ borderColor: palette.border, backgroundColor: palette.bgSurface }}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-[11px] font-medium hover:opacity-85 shrink-0 cursor-pointer"
+                    >
+                      <RefreshCw className={`w-3 h-3 ${historyLoading ? 'animate-spin' : ''}`} />
+                      รีเฟรช
+                    </button>
+                  </div>
+
+                  {historyError && (
+                    <div className="text-[11px] px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 leading-relaxed">
+                      {historyError}
+                    </div>
+                  )}
+
+                  {!historyError && historyItems.length === 0 && !historyLoading && (
+                    <div
+                      style={{ color: palette.textMuted }}
+                      className="text-[11px] text-center py-3 rounded-lg border border-dashed"
+                    >
+                      ยังไม่มีประวัติสำรองย้อนหลัง (จะเริ่มเก็บอัตโนมัติทันทีที่มีการแก้ไขครั้งถัดไป)
+                    </div>
+                  )}
+
+                  {historyItems.length > 0 && (
+                    <div
+                      style={{ borderColor: palette.border, backgroundColor: palette.bgSurface }}
+                      className="max-h-52 overflow-y-auto rounded-xl border divide-y"
+                    >
+                      {historyItems.map((item) => {
+                        const isConfirming = confirmRestoreId === item.id;
+                        return (
+                          <div
+                            key={item.id}
+                            style={{ borderColor: palette.border }}
+                            className="px-3 py-2 flex items-center justify-between gap-2 text-xs"
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span
+                                  style={{ backgroundColor: palette.primarySoft, color: palette.primary }}
+                                  className="text-[10px] font-bold px-2 py-0.5 rounded-full"
+                                >
+                                  {item.member_count} สมาชิก
+                                </span>
+                                <span className="text-[11px] font-semibold">
+                                  {new Date(item.saved_at).toLocaleString('th-TH', {
+                                    day: '2-digit',
+                                    month: 'short',
+                                    hour: '2-digit',
+                                    minute: '2-digit',
+                                    second: '2-digit',
+                                  })}
+                                </span>
+                              </div>
+                              <div
+                                style={{ color: palette.textMuted }}
+                                className="text-[10.5px] truncate mt-0.5"
+                              >
+                                {item.updated_by || item.clan_name}
+                              </div>
+                            </div>
+
+                            {onRestoreHistoryVersion && (
+                              <div className="shrink-0 flex items-center gap-1">
+                                {isConfirming ? (
+                                  <>
+                                    <button
+                                      type="button"
+                                      disabled={busy}
+                                      onClick={async () => {
+                                        setBusy(true);
+                                        setErr('');
+                                        setMsg('');
+                                        const res = await onRestoreHistoryVersion(item.id);
+                                        setBusy(false);
+                                        setConfirmRestoreId(null);
+                                        if (!res.ok) {
+                                          setErr(res.error || 'กู้คืนข้อมูลไม่สำเร็จ');
+                                        } else {
+                                          setMsg(
+                                            `กู้คืนข้อมูลเวอร์ชัน (${item.member_count} สมาชิก) เรียบร้อยแล้ว!`
+                                          );
+                                          loadHistoryList();
+                                        }
+                                      }}
+                                      className="px-2.5 py-1 rounded-lg bg-[#C0392B] text-white text-[10.5px] font-bold hover:opacity-90 cursor-pointer"
+                                    >
+                                      ยืนยันกู้คืน
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setConfirmRestoreId(null)}
+                                      className="px-2 py-1 rounded-lg border text-[10.5px] hover:bg-black/5 cursor-pointer"
+                                    >
+                                      ยกเลิก
+                                    </button>
+                                  </>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    disabled={busy}
+                                    onClick={() => setConfirmRestoreId(item.id)}
+                                    style={{
+                                      borderColor: palette.primary,
+                                      color: palette.primary,
+                                    }}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[10.5px] font-semibold hover:opacity-80 cursor-pointer"
+                                  >
+                                    <RotateCcw className="w-3 h-3" />
+                                    กู้คืน
+                                  </button>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 5. Optional Change Admin PIN */}
               <div style={{ borderColor: palette.border }} className="pt-3 border-t space-y-1.5">
                 <label className="block text-xs font-semibold">
                   เปลี่ยนรหัสผ่านแอดมิน (เว้นว่างถ้าไม่ต้องการเปลี่ยน)

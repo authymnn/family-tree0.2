@@ -66,8 +66,10 @@ import {
 } from './utils/themes';
 import {
   fetchCloudFamilyTree,
+  fetchCloudTreeHistory,
   fetchCloudTreeStatus,
   isSupabaseConfigured,
+  restoreCloudTreeVersion,
   saveCloudFamilyTree,
   subscribeToCloudSync,
   updateCloudAccessSettings,
@@ -89,6 +91,7 @@ import { CoupleDetailModal } from './components/CoupleDetailModal';
 import { PersonAvatar } from './components/PersonAvatar';
 
 const STORAGE_KEY = 'thai_family_tree_v1';
+const LOCAL_SAFETY_BACKUP_KEY = 'thai_family_tree_safety_backup_v1';
 const LOCAL_ACCESS_KEY = 'thai_family_tree_local_access_v1';
 const SESSION_PINS_KEY = 'thai_family_tree_session_pins_v1';
 const VIEW_PREFS_KEY = 'thai_family_tree_view_prefs_v1';
@@ -228,6 +231,7 @@ export const App: React.FC = () => {
   const suppressNextCloudSaveRef = useRef(false);
   const lastSavedStampRef = useRef<number>(0);
   const lastKnownRemoteStampRef = useRef<number>(0);
+  const lastKnownRemoteIsoRef = useRef<string | null>(null);
   const pendingActivityRef = useRef<string>('อัปเดตข้อมูลผังตระกูล');
   const cloudInitializedRef = useRef(false);
   const saveTimerRef = useRef<number | null>(null);
@@ -323,10 +327,27 @@ export const App: React.FC = () => {
     }
   }, [localAccessCfg, sessionPins, data.clanName]);
 
-  // Auto-save family tree to localStorage backup
+  // Auto-save family tree to localStorage backup + preserve largest safety snapshot
   useEffect(() => {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+      const serialized = JSON.stringify(data);
+      localStorage.setItem(STORAGE_KEY, serialized);
+      const currCount = Object.keys(data.members).length;
+      if (currCount > 0) {
+        const existingRaw = localStorage.getItem(LOCAL_SAFETY_BACKUP_KEY);
+        let prevCount = 0;
+        if (existingRaw) {
+          try {
+            const parsed = JSON.parse(existingRaw) as Partial<FamilyTreeData>;
+            prevCount = parsed.members ? Object.keys(parsed.members).length : 0;
+          } catch {
+            prevCount = 0;
+          }
+        }
+        if (currCount >= prevCount) {
+          localStorage.setItem(LOCAL_SAFETY_BACKUP_KEY, serialized);
+        }
+      }
     } catch {
       showToast('พื้นที่จัดเก็บในเบราว์เซอร์เต็ม แนะนำให้สำรองไฟล์ JSON', 'error');
     }
@@ -385,6 +406,7 @@ export const App: React.FC = () => {
       setCloudStatus('synced');
       if (res.updated_at) {
         setLastSyncedAt(res.updated_at);
+        lastKnownRemoteIsoRef.current = res.updated_at;
         const ts = Date.parse(res.updated_at);
         if (!Number.isNaN(ts)) {
           lastKnownRemoteStampRef.current = Math.max(lastKnownRemoteStampRef.current, ts);
@@ -532,43 +554,65 @@ export const App: React.FC = () => {
     saveTimerRef.current = window.setTimeout(async () => {
       const activityMsg = pendingActivityRef.current || 'อัปเดตข้อมูลผังตระกูล';
       const localSnapshot = data;
+      const shouldForceOverwrite = forceOverwriteCloudRef.current;
+      forceOverwriteCloudRef.current = false;
+
       let dataToSave = localSnapshot;
       let mergedWithRemote = false;
+      let expectedUpdatedAt = lastKnownRemoteIsoRef.current;
+      let finalRes: Awaited<ReturnType<typeof saveCloudFamilyTree>> | null = null;
 
-      if (!forceOverwriteCloudRef.current) {
-        const latestRemote = await fetchCloudFamilyTree(sessionPins);
-        if (latestRemote.ok && latestRemote.exists && latestRemote.tree_data) {
-          const remoteValid = validateImportedData(latestRemote.tree_data);
-          const remoteTs = latestRemote.updated_at ? Date.parse(latestRemote.updated_at) : 0;
-          const base = lastSyncedBaseDataRef.current;
-          const remoteChanged =
-            Boolean(remoteValid) &&
-            (!base ||
-              remoteValid!.updatedAt !== base.updatedAt ||
-              (!Number.isNaN(remoteTs) && remoteTs > lastKnownRemoteStampRef.current + 50));
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (!shouldForceOverwrite) {
+          const latestRemote = await fetchCloudFamilyTree(sessionPins);
+          if (latestRemote.ok && latestRemote.exists && latestRemote.tree_data) {
+            if (latestRemote.updated_at) {
+              expectedUpdatedAt = latestRemote.updated_at;
+              lastKnownRemoteIsoRef.current = latestRemote.updated_at;
+            }
+            const remoteValid = validateImportedData(latestRemote.tree_data);
+            const remoteTs = latestRemote.updated_at ? Date.parse(latestRemote.updated_at) : 0;
+            const base = lastSyncedBaseDataRef.current;
+            const remoteChanged =
+              Boolean(remoteValid) &&
+              (attempt > 0 ||
+                !base ||
+                remoteValid!.updatedAt !== base.updatedAt ||
+                (!Number.isNaN(remoteTs) && remoteTs > lastKnownRemoteStampRef.current + 50));
 
-          if (remoteValid && remoteChanged) {
-            const { merged, hadRemoteAdditionsOrEdits } = mergeFamilyTreeData(
-              base,
-              localSnapshot,
-              remoteValid
-            );
-            dataToSave = merged;
-            mergedWithRemote = hadRemoteAdditionsOrEdits;
+            if (remoteValid && remoteChanged) {
+              const { merged, hadRemoteAdditionsOrEdits } = mergeFamilyTreeData(
+                base,
+                localSnapshot,
+                remoteValid
+              );
+              dataToSave = merged;
+              if (hadRemoteAdditionsOrEdits) mergedWithRemote = true;
+            }
           }
         }
-      } else {
-        forceOverwriteCloudRef.current = false;
+
+        const res = await saveCloudFamilyTree({
+          treeData: dataToSave,
+          editPin: sessionPins.editPin,
+          adminPin: sessionPins.adminPin,
+          editorName: activityMsg,
+          expectedUpdatedAt,
+          forceOverwrite: shouldForceOverwrite,
+        });
+        finalRes = res;
+
+        if (res.ok || !res.conflict) {
+          break;
+        }
+        // Another relative saved in the exact same millisecond -> loop to re-fetch & merge cleanly!
       }
 
-      const res = await saveCloudFamilyTree({
-        treeData: dataToSave,
-        editPin: sessionPins.editPin,
-        adminPin: sessionPins.adminPin,
-        editorName: activityMsg,
-      });
-      if (res.ok) {
-        const ts = res.updated_at ? Date.parse(res.updated_at) : Date.now();
+      if (finalRes?.ok) {
+        if (finalRes.updated_at) {
+          lastKnownRemoteIsoRef.current = finalRes.updated_at;
+        }
+        const ts = finalRes.updated_at ? Date.parse(finalRes.updated_at) : Date.now();
         if (!Number.isNaN(ts)) {
           lastSavedStampRef.current = ts;
           lastKnownRemoteStampRef.current = Math.max(lastKnownRemoteStampRef.current, ts);
@@ -582,11 +626,11 @@ export const App: React.FC = () => {
             showToast('ผสานข้อมูลที่ญาติแก้พร้อมกันเรียบร้อย (ไม่ทับกัน)');
           }
         }
-        setLastSyncedAt(res.updated_at);
+        setLastSyncedAt(finalRes.updated_at);
         setCloudStatus('synced');
       } else {
         setCloudStatus('error');
-        showToast(res.error || 'บันทึกขึ้น Cloud ไม่สำเร็จ', 'error');
+        showToast(finalRes?.error || 'บันทึกขึ้น Cloud ไม่สำเร็จ', 'error');
         pullFromCloud(undefined, true);
       }
     }, 350);
@@ -782,14 +826,19 @@ export const App: React.FC = () => {
       return { ok: true };
     }
 
-    // Ensure tree exists on Cloud first before updating access rules
-    const pushFirst = await saveCloudFamilyTree({
-      treeData: data,
-      adminPin: sessionPins.adminPin,
-      editorName: 'admin',
-    });
-    if (!pushFirst.ok) {
-      return { ok: false, error: pushFirst.error };
+    // Only create tree row on Cloud if it does not exist yet
+    if (!lastKnownRemoteIsoRef.current) {
+      const pushFirst = await saveCloudFamilyTree({
+        treeData: data,
+        adminPin: sessionPins.adminPin,
+        editorName: 'admin',
+      });
+      if (!pushFirst.ok) {
+        return { ok: false, error: pushFirst.error };
+      }
+      if (pushFirst.updated_at) {
+        lastKnownRemoteIsoRef.current = pushFirst.updated_at;
+      }
     }
 
     const res = await updateCloudAccessSettings({
@@ -816,9 +865,14 @@ export const App: React.FC = () => {
     setCloudStatus('saving');
     let dataToSave = data;
     let mergedWithRemote = false;
+    let expectedUpdatedAt = lastKnownRemoteIsoRef.current;
 
     const latestRemote = await fetchCloudFamilyTree(sessionPins);
     if (latestRemote.ok && latestRemote.exists && latestRemote.tree_data) {
+      if (latestRemote.updated_at) {
+        expectedUpdatedAt = latestRemote.updated_at;
+        lastKnownRemoteIsoRef.current = latestRemote.updated_at;
+      }
       const remoteValid = validateImportedData(latestRemote.tree_data);
       const base = lastSyncedBaseDataRef.current;
       if (remoteValid && (!base || remoteValid.updatedAt !== base.updatedAt)) {
@@ -833,8 +887,12 @@ export const App: React.FC = () => {
       editPin: sessionPins.editPin,
       adminPin: sessionPins.adminPin,
       editorName: access.isAdmin ? 'แอดมินซิงก์ข้อมูลผังตระกูล' : 'อัปเดตข้อมูลผังตระกูล',
+      expectedUpdatedAt,
     });
     if (res.ok) {
+      if (res.updated_at) {
+        lastKnownRemoteIsoRef.current = res.updated_at;
+      }
       const ts = res.updated_at ? Date.parse(res.updated_at) : Date.now();
       if (!Number.isNaN(ts)) {
         lastSavedStampRef.current = ts;
@@ -881,14 +939,33 @@ export const App: React.FC = () => {
       return { ok: true };
     }
 
+    // Pull latest tree first so broadcasting display preset never overwrites recent member edits
+    let treeToSave = data;
+    let expectedUpdatedAt = lastKnownRemoteIsoRef.current;
+    const latestRemote = await fetchCloudFamilyTree(sessionPins);
+    if (latestRemote.ok && latestRemote.exists && latestRemote.tree_data) {
+      if (latestRemote.updated_at) {
+        expectedUpdatedAt = latestRemote.updated_at;
+        lastKnownRemoteIsoRef.current = latestRemote.updated_at;
+      }
+      const remoteValid = validateImportedData(latestRemote.tree_data);
+      if (remoteValid) {
+        treeToSave = mergeFamilyTreeData(lastSyncedBaseDataRef.current, data, remoteValid).merged;
+      }
+    }
+
     const res = await saveCloudFamilyTree({
-      treeData: data,
+      treeData: treeToSave,
       themeSettings: preset,
       adminPin: sessionPins.adminPin,
       editorName: 'admin_display_preset',
+      expectedUpdatedAt,
     });
     if (!res.ok) {
       return { ok: false, error: res.error || 'ไม่สามารถส่งรูปแบบการแสดงผลได้' };
+    }
+    if (res.updated_at) {
+      lastKnownRemoteIsoRef.current = res.updated_at;
     }
     const ts = res.updated_at ? Date.parse(res.updated_at) : Date.now();
     if (!Number.isNaN(ts)) {
@@ -1706,6 +1783,15 @@ export const App: React.FC = () => {
             if (res?.ok) showToast('ดึงข้อมูลล่าสุดจาก Cloud เรียบร้อยแล้ว');
           }}
           onManualSyncPush={handleManualSyncPush}
+          onLoadHistory={() => fetchCloudTreeHistory(sessionPins.adminPin, 50)}
+          onRestoreHistoryVersion={async (historyId) => {
+            const res = await restoreCloudTreeVersion(sessionPins.adminPin, historyId);
+            if (!res.ok) return { ok: false, error: res.error };
+            hasUnsavedLocalChangesRef.current = false;
+            await pullFromCloud(undefined, true);
+            showToast('กู้คืนข้อมูลย้อนหลังเรียบร้อยแล้ว!');
+            return { ok: true };
+          }}
         />
       )}
 

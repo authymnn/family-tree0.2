@@ -115,32 +115,128 @@ export async function fetchCloudFamilyTree(params: {
   return data as FetchCloudTreeResponse;
 }
 
+export interface SaveCloudTreeResult {
+  ok: boolean;
+  conflict?: boolean;
+  stale_client?: boolean;
+  updated_at?: string;
+  server_updated_at?: string;
+  error?: string;
+}
+
 export async function saveCloudFamilyTree(params: {
   treeData: FamilyTreeData;
   themeSettings?: SharedDisplayPreset | ThemeSettings;
   editPin?: string;
   adminPin?: string;
   editorName?: string;
-}): Promise<{ ok: boolean; updated_at?: string; error?: string }> {
+  expectedUpdatedAt?: string | null;
+  forceOverwrite?: boolean;
+}): Promise<SaveCloudTreeResult> {
   if (!supabase) {
     return { ok: false, error: 'ยังไม่ได้ตั้งค่า Supabase' };
   }
-  const { data, error } = await supabase.rpc('save_family_tree', {
+
+  const basePayload = {
     p_tree_id: FAMILY_TREE_ID,
     p_tree_data: params.treeData,
     p_theme_settings: params.themeSettings ?? null,
     p_edit_pin: params.editPin ?? '',
     p_admin_pin: params.adminPin ?? '',
-    p_editor_name: params.editorName ?? 'family_member',
+    p_editor_name: params.editorName ?? 'อัปเดตข้อมูลผังตระกูล',
+  };
+
+  let { data, error } = await supabase.rpc('save_family_tree', {
+    ...basePayload,
+    p_expected_updated_at: params.expectedUpdatedAt ?? null,
+    p_force_overwrite: params.forceOverwrite ?? false,
+  });
+
+  // Seamless backward compatibility if Supabase SQL hasn't been upgraded yet
+  if (error && (error.code === 'PGRST202' || /could not find the function/i.test(error.message))) {
+    const legacy = await supabase.rpc('save_family_tree', basePayload);
+    data = legacy.data;
+    error = legacy.error;
+  }
+
+  if (error) {
+    return { ok: false, error: error.message };
+  }
+
+  const result = data as SaveCloudTreeResult;
+  if (result.ok) {
+    broadcastCloudSync({
+      updated_at: result.updated_at,
+      updated_by: params.editorName ?? 'อัปเดตข้อมูลผังตระกูล',
+    });
+  }
+  return result;
+}
+
+export interface CloudHistoryItem {
+  id: number;
+  member_count: number;
+  clan_name: string;
+  updated_by?: string;
+  saved_at: string;
+}
+
+export async function fetchCloudTreeHistory(
+  adminPin: string,
+  limit = 40
+): Promise<{ ok: boolean; items: CloudHistoryItem[]; needsSqlUpgrade?: boolean; error?: string }> {
+  if (!supabase) {
+    return { ok: false, items: [], error: 'ยังไม่ได้ตั้งค่า Supabase' };
+  }
+  const { data, error } = await supabase.rpc('get_family_tree_history', {
+    p_tree_id: FAMILY_TREE_ID,
+    p_admin_pin: adminPin,
+    p_limit: limit,
+  });
+  if (error) {
+    if (error.code === 'PGRST202' || /could not find the function/i.test(error.message)) {
+      return {
+        ok: false,
+        items: [],
+        needsSqlUpgrade: true,
+        error: 'กรุณารันไฟล์ supabase/schema.sql เวอร์ชันใหม่ใน Supabase SQL Editor ก่อนเพื่อเปิดระบบประวัติสำรอง',
+      };
+    }
+    return { ok: false, items: [], error: error.message };
+  }
+  const res = data as { ok: boolean; items?: CloudHistoryItem[]; error?: string };
+  return {
+    ok: Boolean(res.ok),
+    items: Array.isArray(res.items) ? res.items : [],
+    error: res.error,
+  };
+}
+
+export async function restoreCloudTreeVersion(
+  adminPin: string,
+  historyId: number
+): Promise<{ ok: boolean; updated_at?: string; restored_member_count?: number; error?: string }> {
+  if (!supabase) {
+    return { ok: false, error: 'ยังไม่ได้ตั้งค่า Supabase' };
+  }
+  const { data, error } = await supabase.rpc('restore_family_tree_version', {
+    p_tree_id: FAMILY_TREE_ID,
+    p_admin_pin: adminPin,
+    p_history_id: historyId,
   });
   if (error) {
     return { ok: false, error: error.message };
   }
-  const result = data as { ok: boolean; updated_at?: string; error?: string };
+  const result = data as {
+    ok: boolean;
+    updated_at?: string;
+    restored_member_count?: number;
+    error?: string;
+  };
   if (result.ok) {
     broadcastCloudSync({
-      updated_at: result.updated_at,
-      updated_by: params.editorName ?? 'family_member',
+      updated_at: result.updated_at || new Date().toISOString(),
+      updated_by: 'แอดมินกู้คืนข้อมูลย้อนหลัง',
     });
   }
   return result;
