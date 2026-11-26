@@ -14,10 +14,15 @@ import {
   Briefcase,
   Image as ImageIcon,
 } from 'lucide-react';
-import { FamilyTreeData, Person, ThemeSettings } from '../types/family';
+import { CardStyle, FamilyTreeData, Person, ThemeSettings, TreeOrientation } from '../types/family';
 import { ThemePalette } from '../utils/themes';
 import { calculateAge, formatThaiDate } from '../utils/dateUtils';
-import { getChildrenOf, getDisplayNameWithNickname, getFullName } from '../utils/familyOps';
+import {
+  getChildrenOf,
+  getDisplayNameWithNickname,
+  getFullName,
+  getSiblingRankInfo,
+} from '../utils/familyOps';
 import { PersonAvatar } from './PersonAvatar';
 import { TreeCanvas } from './TreeCanvas';
 
@@ -44,6 +49,8 @@ export const SimpleView: React.FC<SimpleViewProps> = ({
   const [selectedPersonId, setSelectedPersonId] = useState<string | null>(null);
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(() => new Set());
+  const [cardStyle, setCardStyle] = useState<CardStyle>('photo-only');
+  const [orientation, setOrientation] = useState<TreeOrientation>('left-right');
 
   const groupedByGeneration = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -243,6 +250,7 @@ export const SimpleView: React.FC<SimpleViewProps> = ({
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     {members.map((member) => {
                       const age = calculateAge(member.birthDate, member.deathDate, member.isDeceased);
+                      const siblingRank = getSiblingRankInfo(data.members, member.id);
                       const spouses = member.spouses
                         .map((s) => data.members[s.spouseId])
                         .filter(Boolean);
@@ -269,6 +277,14 @@ export const SimpleView: React.FC<SimpleViewProps> = ({
                                     className="text-sm font-bold px-2.5 py-0.5 rounded-full"
                                   >
                                     {member.nickname}
+                                  </span>
+                                )}
+                                {siblingRank && (
+                                  <span
+                                    style={{ backgroundColor: palette.primarySoft, color: palette.primary }}
+                                    className="text-xs font-bold px-2.5 py-0.5 rounded-full"
+                                  >
+                                    {siblingRank.label}
                                   </span>
                                 )}
                                 {member.isDeceased && (
@@ -350,8 +366,10 @@ export const SimpleView: React.FC<SimpleViewProps> = ({
           highlightIds={null}
           focusRootId={null}
           onClearFocusRoot={() => {}}
-          compact={false}
-          onToggleCompact={() => {}}
+          cardStyle={cardStyle}
+          onChangeCardStyle={setCardStyle}
+          orientation={orientation}
+          onChangeOrientation={setOrientation}
           collapsedIds={collapsedIds}
           onToggleCollapse={(id) =>
             setCollapsedIds((prev) => {

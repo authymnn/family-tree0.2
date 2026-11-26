@@ -1,7 +1,11 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { X, UserPlus, Link2, Search, Camera, StickyNote } from 'lucide-react';
 import { FamilyTreeData, Gender, Person, QuickAddRelation, SpouseStatus } from '../types/family';
-import { getDisplayNameWithNickname } from '../utils/familyOps';
+import {
+  getChildrenOf,
+  getDisplayNameWithNickname,
+  getSiblingsOf,
+} from '../utils/familyOps';
 import { resizeImageFile } from '../utils/imageUtils';
 import { uploadDataUrlToStorage } from '../lib/supabase';
 import { PersonAvatar } from './PersonAvatar';
@@ -19,6 +23,7 @@ interface QuickAddModalProps {
     gender: Gender;
     photo?: string;
     birthDate?: string;
+    birthOrder?: number;
     isDeceased?: boolean;
     deathDate?: string;
     occupation?: string;
@@ -83,6 +88,20 @@ export const QuickAddModal: React.FC<QuickAddModalProps> = ({
     return 'male';
   }, [anchorPerson, relation, data.members]);
 
+  // Smart auto-suggested sibling/birth order when adding a child or sibling!
+  const suggestedBirthOrder = useMemo(() => {
+    if (!anchorPerson) return '';
+    if (relation === 'child') {
+      const existingChildren = getChildrenOf(data.members, anchorPerson.id);
+      return String(existingChildren.length + 1);
+    }
+    if (relation === 'sibling') {
+      const existingSibs = getSiblingsOf(data.members, anchorPerson.id);
+      return String(existingSibs.length + 2);
+    }
+    return '';
+  }, [anchorPerson, relation, data.members]);
+
   const defaultLastName = anchorPerson?.lastName ?? '';
 
   const [firstName, setFirstName] = useState('');
@@ -91,6 +110,7 @@ export const QuickAddModal: React.FC<QuickAddModalProps> = ({
   const [gender, setGender] = useState<Gender>(defaultGender);
   const [photo, setPhoto] = useState<string | undefined>(undefined);
   const [birthDate, setBirthDate] = useState('');
+  const [birthOrder, setBirthOrder] = useState<string>(suggestedBirthOrder);
   const [isDeceased, setIsDeceased] = useState(false);
   const [deathDate, setDeathDate] = useState('');
   const [occupation, setOccupation] = useState('');
@@ -142,6 +162,7 @@ export const QuickAddModal: React.FC<QuickAddModalProps> = ({
       setErrorMsg('กรุณากรอกชื่อจริง');
       return;
     }
+    const parsedOrder = birthOrder.trim() ? parseInt(birthOrder.trim(), 10) : undefined;
     onCreateNew({
       firstName: firstName.trim(),
       lastName: lastName.trim(),
@@ -149,6 +170,7 @@ export const QuickAddModal: React.FC<QuickAddModalProps> = ({
       gender,
       photo,
       birthDate: birthDate.trim() || undefined,
+      birthOrder: parsedOrder && !Number.isNaN(parsedOrder) ? parsedOrder : undefined,
       isDeceased,
       deathDate: isDeceased ? deathDate.trim() || undefined : undefined,
       occupation: occupation.trim() || undefined,
@@ -387,7 +409,7 @@ export const QuickAddModal: React.FC<QuickAddModalProps> = ({
               </div>
             )}
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-3 gap-3">
               <div>
                 <label className="block text-xs font-medium theme-muted-text mb-1">วันเกิด</label>
                 <input
@@ -395,7 +417,22 @@ export const QuickAddModal: React.FC<QuickAddModalProps> = ({
                   value={birthDate}
                   onChange={(e) => setBirthDate(e.target.value)}
                   style={{ borderColor: 'var(--theme-border)', backgroundColor: 'var(--theme-bg-surface)' }}
-                  className="w-full px-3 py-2 text-sm rounded-xl border focus:outline-none"
+                  className="w-full px-2.5 py-2 text-sm rounded-xl border focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium theme-muted-text mb-1">
+                  พี่น้องคนที่
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={30}
+                  value={birthOrder}
+                  onChange={(e) => setBirthOrder(e.target.value)}
+                  placeholder="คนที่ 1, 2..."
+                  style={{ borderColor: 'var(--theme-border)', backgroundColor: 'var(--theme-bg-surface)' }}
+                  className="w-full px-2.5 py-2 text-sm rounded-xl border focus:outline-none"
                 />
               </div>
               <div>
@@ -407,7 +444,7 @@ export const QuickAddModal: React.FC<QuickAddModalProps> = ({
                   onChange={(e) => setBranch(e.target.value)}
                   placeholder="เช่น สายบ้านใหญ่"
                   style={{ borderColor: 'var(--theme-border)', backgroundColor: 'var(--theme-bg-surface)' }}
-                  className="w-full px-3 py-2 text-sm rounded-xl border focus:outline-none"
+                  className="w-full px-2.5 py-2 text-sm rounded-xl border focus:outline-none"
                 />
                 <datalist id="branch-suggestions">
                   {existingBranches.map((b) => (

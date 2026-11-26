@@ -276,6 +276,242 @@ export function deletePerson(data: FamilyTreeData, personId: string): FamilyTree
   };
 }
 
+export interface SiblingRankInfo {
+  order: number;          // ลำดับคนที่ (1, 2, 3...)
+  total: number;          // จำนวนพี่น้องทั้งหมดรวมตัวเอง
+  isEldest: boolean;
+  isYoungest: boolean;
+  label: string;          // เช่น "บุตรคนที่ 1/3 (คนโต)"
+  shortLabel: string;     // เช่น "คนที่ 1/3" หรือ "คนโต"
+}
+
+/**
+ * Compute sibling birth order rank (using explicit birthOrder first, then birthDate).
+ */
+export function getSiblingRankInfo(
+  members: Record<string, Person>,
+  personId: string
+): SiblingRankInfo | null {
+  const person = members[personId];
+  if (!person) return null;
+
+  // Gather all siblings including self (anyone sharing at least one parent)
+  if (person.parentIds.length > 0) {
+    const parentSet = new Set(person.parentIds);
+    const group = Object.values(members)
+      .filter((m) => m.parentIds.some((pid) => parentSet.has(pid)))
+      .sort((a, b) => {
+        if (a.birthOrder != null && b.birthOrder != null && a.birthOrder !== b.birthOrder) {
+          return a.birthOrder - b.birthOrder;
+        }
+        if (a.birthOrder != null && b.birthOrder == null) return -1;
+        if (a.birthOrder == null && b.birthOrder != null) return 1;
+        const cmp = compareBirthDates(a.birthDate, b.birthDate);
+        if (cmp !== 0) return cmp;
+        return a.firstName.localeCompare(b.firstName, 'th');
+      });
+
+    const idx = group.findIndex((m) => m.id === personId);
+    if (idx === -1) return null;
+    const total = group.length;
+    const order = person.birthOrder ?? idx + 1;
+    const isEldest = total > 1 && idx === 0;
+    const isYoungest = total > 1 && idx === total - 1;
+
+    if (total === 1 && person.birthOrder == null) {
+      return {
+        order: 1,
+        total: 1,
+        isEldest: false,
+        isYoungest: false,
+        label: 'บุตรคนเดียว',
+        shortLabel: 'ลูกคนเดียว',
+      };
+    }
+
+    const roleSuffix = isEldest ? ' · คนโต' : isYoungest ? ' · คนเล็ก' : '';
+    return {
+      order,
+      total,
+      isEldest,
+      isYoungest,
+      label: `คนที่ ${order}/${total}${roleSuffix}`,
+      shortLabel: isEldest ? `คนที่ ${order} (โต)` : isYoungest ? `คนที่ ${order} (เล็ก)` : `คนที่ ${order}/${total}`,
+    };
+  }
+
+  // Even without recorded parents, if user explicitly set birthOrder, show it!
+  if (person.birthOrder != null) {
+    return {
+      order: person.birthOrder,
+      total: person.birthOrder,
+      isEldest: person.birthOrder === 1,
+      isYoungest: false,
+      label: `พี่น้องคนที่ ${person.birthOrder}`,
+      shortLabel: `คนที่ ${person.birthOrder}`,
+    };
+  }
+
+  return null;
+}
+
+export interface CoupleUnitSummary {
+  id: string;
+  personA: Person;
+  personB: Person;
+  link: {
+    status: SpouseStatus;
+    familyName?: string;
+    marriageDate?: string;
+    marriagePlace?: string;
+    residence?: string;
+    note?: string;
+  };
+  children: Person[];
+}
+
+/**
+ * Aggregate all unique couples in the family tree along with their children & household details.
+ */
+export function getCoupleUnits(members: Record<string, Person>): CoupleUnitSummary[] {
+  const seen = new Set<string>();
+  const units: CoupleUnitSummary[] = [];
+
+  for (const person of Object.values(members)) {
+    for (const sp of person.spouses) {
+      const partner = members[sp.spouseId];
+      if (!partner) continue;
+      const pairKey = [person.id, partner.id].sort().join('::');
+      if (seen.has(pairKey)) continue;
+      seen.add(pairKey);
+
+      const partnerSp = partner.spouses.find((s) => s.spouseId === person.id);
+
+      // Prefer bloodline member (one with parents) or male first for consistent ordering
+      const [first, second] =
+        person.parentIds.length >= partner.parentIds.length
+          ? [person, partner]
+          : [partner, person];
+
+      const children = Object.values(members)
+        .filter((m) => m.parentIds.includes(first.id) || m.parentIds.includes(second.id))
+        .filter((m) => {
+          // If child has 2 parents, only include if both belong to this couple
+          if (m.parentIds.length === 2) {
+            return m.parentIds.includes(first.id) && m.parentIds.includes(second.id);
+          }
+          return true;
+        })
+        .sort((a, b) => {
+          if (a.birthOrder != null && b.birthOrder != null && a.birthOrder !== b.birthOrder) {
+            return a.birthOrder - b.birthOrder;
+          }
+          const cmp = compareBirthDates(a.birthDate, b.birthDate);
+          if (cmp !== 0) return cmp;
+          return a.firstName.localeCompare(b.firstName, 'th');
+        });
+
+      units.push({
+        id: pairKey,
+        personA: first,
+        personB: second,
+        link: {
+          status: sp.status || partnerSp?.status || 'married',
+          familyName: sp.familyName || partnerSp?.familyName,
+          marriageDate: sp.marriageDate || partnerSp?.marriageDate,
+          marriagePlace: sp.marriagePlace || partnerSp?.marriagePlace,
+          residence: sp.residence || partnerSp?.residence,
+          note: sp.note || partnerSp?.note,
+        },
+        children,
+      });
+    }
+  }
+
+  return units;
+}
+
+/**
+ * Update all household/couple details symmetrically on both spouses.
+ */
+export function updateSpouseDetails(
+  data: FamilyTreeData,
+  personAId: string,
+  personBId: string,
+  details: {
+    status: SpouseStatus;
+    familyName?: string;
+    marriageDate?: string;
+    marriagePlace?: string;
+    residence?: string;
+    note?: string;
+  }
+): FamilyTreeData {
+  const a = data.members[personAId];
+  const b = data.members[personBId];
+  if (!a || !b) return data;
+
+  const now = new Date().toISOString();
+  const cleanDetails = {
+    status: details.status,
+    familyName: details.familyName?.trim() || undefined,
+    marriageDate: details.marriageDate?.trim() || undefined,
+    marriagePlace: details.marriagePlace?.trim() || undefined,
+    residence: details.residence?.trim() || undefined,
+    note: details.note?.trim() || undefined,
+  };
+
+  const updateList = (list: Person['spouses'], targetId: string) => {
+    const exists = list.some((s) => s.spouseId === targetId);
+    if (!exists) return [...list, { spouseId: targetId, ...cleanDetails }];
+    return list.map((s) => (s.spouseId === targetId ? { ...s, ...cleanDetails } : s));
+  };
+
+  return {
+    ...data,
+    updatedAt: now,
+    members: {
+      ...data.members,
+      [personAId]: {
+        ...a,
+        spouses: updateList(a.spouses, personBId),
+        updatedAt: now,
+      },
+      [personBId]: {
+        ...b,
+        spouses: updateList(b.spouses, personAId),
+        updatedAt: now,
+      },
+    },
+  };
+}
+
+/**
+ * Reorder siblings/children by assigning clean 1..N birthOrder values.
+ */
+export function reorderChildren(
+  data: FamilyTreeData,
+  orderedChildIds: string[]
+): FamilyTreeData {
+  const now = new Date().toISOString();
+  const nextMembers = { ...data.members };
+  orderedChildIds.forEach((cid, idx) => {
+    const m = nextMembers[cid];
+    if (m) {
+      nextMembers[cid] = {
+        ...m,
+        birthOrder: idx + 1,
+        updatedAt: now,
+      };
+    }
+  });
+  return {
+    ...data,
+    updatedAt: now,
+    members: nextMembers,
+  };
+}
+
 /**
  * Add a relative to an anchor person with smart defaults (surname, branch, partner co-parenting).
  */
@@ -290,6 +526,7 @@ export function addRelative(
     gender: Gender;
     photo?: string;
     birthDate?: string;
+    birthOrder?: number;
     isDeceased?: boolean;
     deathDate?: string;
     occupation?: string;
@@ -311,6 +548,7 @@ export function addRelative(
     gender: fields.gender,
     photo: fields.photo,
     birthDate: fields.birthDate?.trim() || undefined,
+    birthOrder: fields.birthOrder,
     isDeceased: Boolean(fields.isDeceased),
     deathDate: fields.isDeceased ? fields.deathDate?.trim() || undefined : undefined,
     occupation: fields.occupation?.trim() || undefined,

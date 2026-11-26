@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { FamilyTreeData, Person } from '../types/family';
 import { calculateAge, formatThaiDate } from '../utils/dateUtils';
-import { getFullName } from '../utils/familyOps';
+import { getFullName, getSiblingRankInfo } from '../utils/familyOps';
 import { PersonAvatar } from './PersonAvatar';
 
 interface DirectoryViewProps {
@@ -83,6 +83,7 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
   const handleExportCsv = () => {
     const headers = [
       'รุ่น',
+      'ลำดับพี่น้อง',
       'คำนำหน้า',
       'ชื่อจริง',
       'นามสกุล',
@@ -102,8 +103,10 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
     const escapeCsv = (val: string) => `"${(val || '').replace(/"/g, '""')}"`;
     const rows = filteredMembers.map((m: Person) => {
       const age = calculateAge(m.birthDate, m.deathDate, m.isDeceased);
+      const rank = getSiblingRankInfo(data.members, m.id);
       return [
         String(generationMap[m.id] ?? ''),
+        rank?.label || '',
         m.title || '',
         m.firstName,
         m.lastName,
@@ -241,6 +244,7 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
             {filteredMembers.map((member) => {
               const age = calculateAge(member.birthDate, member.deathDate, member.isDeceased);
               const gen = generationMap[member.id];
+              const rank = getSiblingRankInfo(data.members, member.id);
               return (
                 <div
                   key={member.id}
@@ -254,6 +258,11 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
                         {gen != null && (
                           <span className="text-[10.5px] font-semibold px-1.5 py-0.5 rounded bg-[#E9F2EE] text-[#225144]">
                             รุ่น {gen}
+                          </span>
+                        )}
+                        {rank && (
+                          <span className="text-[10.5px] font-semibold px-1.5 py-0.5 rounded bg-[#F2EEE7] text-[#465550]">
+                            {rank.shortLabel}
                           </span>
                         )}
                         {member.nickname && (

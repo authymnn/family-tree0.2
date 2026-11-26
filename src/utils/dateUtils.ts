@@ -132,3 +132,17 @@ export function compareBirthDates(a?: string, b?: string): number {
   if ((pa.month ?? 6) !== (pb.month ?? 6)) return (pa.month ?? 6) - (pb.month ?? 6);
   return (pa.day ?? 15) - (pb.day ?? 15);
 }
+
+/**
+ * Calculate completed years since a milestone date (e.g., marriage anniversary years)
+ */
+export function calculateYearsSince(dateStr?: string): number | null {
+  return calculateAge(dateStr, undefined, false);
+}
+
+/**
+ * Days until next annual anniversary (0 = today, null if no month/day)
+ */
+export function daysUntilNextAnniversary(dateStr?: string): number | null {
+  return daysUntilNextBirthday(dateStr);
+}

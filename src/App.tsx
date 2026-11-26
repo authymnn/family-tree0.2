@@ -20,11 +20,13 @@ import {
   Cloud,
 } from 'lucide-react';
 import {
+  CardStyle,
   FamilyTreeData,
   Person,
   QuickAddRelation,
   SpouseStatus,
   ThemeSettings,
+  TreeOrientation,
   ViewMode,
 } from './types/family';
 import {
@@ -42,8 +44,10 @@ import {
   getDisplayNameWithNickname,
   linkParentChild,
   linkSpouses,
+  reorderChildren,
   unlinkParentChild,
   unlinkSpouses,
+  updateSpouseDetails,
   updateSpouseStatus,
   upsertPerson,
   validateImportedData,
@@ -75,6 +79,7 @@ import { ThemePickerModal } from './components/ThemePickerModal';
 import { SimpleView } from './components/SimpleView';
 import { AdminAccessModal } from './components/AdminAccessModal';
 import { AccessGateScreen } from './components/AccessGateScreen';
+import { CoupleDetailModal } from './components/CoupleDetailModal';
 import { PersonAvatar } from './components/PersonAvatar';
 
 const STORAGE_KEY = 'thai_family_tree_v1';
@@ -196,7 +201,8 @@ export const App: React.FC = () => {
   const [view, setView] = useState<ViewMode>('tree');
   const [simpleMode, setSimpleMode] = useState(false);
   const [selectedPersonId, setSelectedPersonId] = useState<string | null>(null);
-  const [compact, setCompact] = useState(false);
+  const [cardStyle, setCardStyle] = useState<CardStyle>('detailed');
+  const [orientation, setOrientation] = useState<TreeOrientation>('top-down');
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(() => new Set());
   const [focusRootId, setFocusRootId] = useState<string | null>(null);
 
@@ -214,6 +220,10 @@ export const App: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [showThemePicker, setShowThemePicker] = useState(false);
   const [showAdminModal, setShowAdminModal] = useState(false);
+  const [coupleModalState, setCoupleModalState] = useState<{
+    personAId: string;
+    personBId: string;
+  } | null>(null);
 
   // Global search bar
   const [searchQuery, setSearchQuery] = useState('');
@@ -689,6 +699,7 @@ export const App: React.FC = () => {
     gender: Person['gender'];
     photo?: string;
     birthDate?: string;
+    birthOrder?: number;
     isDeceased?: boolean;
     deathDate?: string;
     occupation?: string;
@@ -706,6 +717,7 @@ export const App: React.FC = () => {
         gender: fields.gender,
         photo: fields.photo,
         birthDate: fields.birthDate,
+        birthOrder: fields.birthOrder,
         isDeceased: Boolean(fields.isDeceased),
         deathDate: fields.deathDate,
         occupation: fields.occupation,
@@ -1102,8 +1114,10 @@ export const App: React.FC = () => {
             }}
             focusRootId={focusRootId}
             onClearFocusRoot={() => setFocusRootId(null)}
-            compact={compact}
-            onToggleCompact={() => setCompact((c) => !c)}
+            cardStyle={cardStyle}
+            onChangeCardStyle={setCardStyle}
+            orientation={orientation}
+            onChangeOrientation={setOrientation}
             collapsedIds={collapsedIds}
             onToggleCollapse={handleToggleCollapse}
             onExpandAll={() => {
@@ -1112,6 +1126,9 @@ export const App: React.FC = () => {
             }}
             onCollapseToLevel2={handleCollapseToLevel2}
             onSelectPerson={(id) => setSelectedPersonId(id)}
+            onOpenCoupleDetail={(personAId, personBId) =>
+              setCoupleModalState({ personAId, personBId })
+            }
             onQuickAdd={(anchorId, relation) => {
               if (!access.canEdit) {
                 setShowAdminModal(true);
@@ -1165,7 +1182,11 @@ export const App: React.FC = () => {
           <OverviewView
             data={data}
             generationMap={fullLayoutForMeta.generationMap}
+            canEdit={access.canEdit}
             onSelectPerson={(id) => setSelectedPersonId(id)}
+            onOpenCoupleDetail={(personAId, personBId) =>
+              setCoupleModalState({ personAId, personBId })
+            }
           />
         )}
 
@@ -1186,6 +1207,13 @@ export const App: React.FC = () => {
               if (view === 'tree') {
                 treeCanvasRef.current?.focusPerson(id);
               }
+            }}
+            onOpenCoupleDetail={(personAId, personBId) =>
+              setCoupleModalState({ personAId, personBId })
+            }
+            onReorderChildren={(orderedChildIds) => {
+              commitChange(reorderChildren(data, orderedChildIds));
+              showToast('ปรับลำดับพี่น้องเรียบร้อยแล้ว');
             }}
             onQuickAdd={(anchorId, relation) => setQuickAddState({ anchorId, relation })}
             onUnlinkParent={(parentId, childId) => {
@@ -1213,6 +1241,32 @@ export const App: React.FC = () => {
           />
         )}
       </main>
+
+      {/* Couple / Household Detail Settings Modal */}
+      {coupleModalState && (
+        <CoupleDetailModal
+          data={data}
+          personAId={coupleModalState.personAId}
+          personBId={coupleModalState.personBId}
+          palette={palette}
+          canEdit={access.canEdit}
+          onClose={() => setCoupleModalState(null)}
+          onSaveDetails={(aId, bId, details) => {
+            commitChange(updateSpouseDetails(data, aId, bId, details));
+            showToast('บันทึกรายละเอียดคู่ครอบครัวเรียบร้อยแล้ว');
+          }}
+          onReorderChildren={(orderedChildIds) => {
+            commitChange(reorderChildren(data, orderedChildIds));
+            showToast('ปรับลำดับพี่น้องเรียบร้อยแล้ว');
+          }}
+          onSelectPerson={(id) => {
+            setSelectedPersonId(id);
+            if (view === 'tree') {
+              treeCanvasRef.current?.focusPerson(id);
+            }
+          }}
+        />
+      )}
 
       {/* Quick Add Modal */}
       {quickAddState && access.canEdit && (
@@ -1282,7 +1336,7 @@ export const App: React.FC = () => {
             setTimeout(() => treeCanvasRef.current?.fitToScreen(), 120);
           }}
           onExportPng={() =>
-            exportTreeAsPng(data, { compact, collapsedIds, focusRootId, palette })
+            exportTreeAsPng(data, { cardStyle, orientation, collapsedIds, focusRootId, palette })
           }
           onResetSample={() => {
             commitChange(createSampleFamilyTree());

@@ -5,8 +5,11 @@ export type SpouseStatus = 'married' | 'divorced' | 'widowed' | 'partner';
 export interface SpouseLink {
   spouseId: string;
   status: SpouseStatus;
-  marriageDate?: string; // YYYY-MM-DD or YYYY
-  note?: string;
+  familyName?: string;     // ชื่อบ้าน / ชื่อครอบครัว เช่น "บ้านบางรัก", "เรือนสวนเชียงใหม่"
+  marriageDate?: string;   // YYYY-MM-DD or YYYY
+  marriagePlace?: string;  // สถานที่แต่งงาน / จดทะเบียนสมรส
+  residence?: string;      // ที่อยู่ของครอบครัวคู่นี้
+  note?: string;           // เรื่องราว / บันทึกของคู่นี้
 }
 
 export interface PhotoItem {
@@ -57,6 +60,10 @@ export interface FamilyTreeData {
 export type ViewMode = 'tree' | 'directory' | 'kinship' | 'overview';
 
 export type QuickAddRelation = 'child' | 'parent' | 'spouse' | 'sibling';
+
+export type CardStyle = 'detailed' | 'compact' | 'photo-only';
+
+export type TreeOrientation = 'top-down' | 'bottom-up' | 'left-right';
 
 export type ThemePresetId = 'heirloom' | 'indigo' | 'crimson' | 'celadon' | 'midnight';
 

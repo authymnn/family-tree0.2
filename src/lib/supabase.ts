@@ -2,17 +2,46 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { FamilyTreeData, ThemeSettings } from '../types/family';
 import { EditAccessMode, ViewAccessMode } from '../types/access';
 
-const SUPABASE_URL = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.trim() || '';
-const SUPABASE_ANON_KEY = (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined)?.trim() || '';
+function sanitizeEnvValue(raw: string | undefined, expectedKeyPrefix: string): string {
+  if (!raw) return '';
+  let val = raw.trim();
+  const prefix = `${expectedKeyPrefix}=`;
+  if (val.startsWith(prefix)) {
+    val = val.slice(prefix.length).trim();
+  }
+  // Strip accidental surrounding quotes
+  if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+    val = val.slice(1, -1).trim();
+  }
+  return val;
+}
+
+const SUPABASE_URL = sanitizeEnvValue(
+  import.meta.env.VITE_SUPABASE_URL as string | undefined,
+  'VITE_SUPABASE_URL'
+);
+const SUPABASE_ANON_KEY = sanitizeEnvValue(
+  import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined,
+  'VITE_SUPABASE_ANON_KEY'
+);
 
 export const FAMILY_TREE_ID =
-  (import.meta.env.VITE_FAMILY_TREE_ID as string | undefined)?.trim() || 'main';
+  sanitizeEnvValue(
+    import.meta.env.VITE_FAMILY_TREE_ID as string | undefined,
+    'VITE_FAMILY_TREE_ID'
+  ) || 'main';
 
-export const isSupabaseConfigured = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
+const hasValidUrl = /^https?:\/\/.+/i.test(SUPABASE_URL);
+export const isSupabaseConfigured = Boolean(hasValidUrl && SUPABASE_ANON_KEY);
 
-export const supabase: SupabaseClient | null = isSupabaseConfigured
-  ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
-  : null;
+export const supabase: SupabaseClient | null = (() => {
+  if (!isSupabaseConfigured) return null;
+  try {
+    return createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  } catch {
+    return null;
+  }
+})();
 
 export interface FetchCloudTreeResponse {
   ok: boolean;

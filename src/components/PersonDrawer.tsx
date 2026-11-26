@@ -24,6 +24,8 @@ import {
   StickyNote,
   ImagePlus,
   Images,
+  Settings2,
+  ArrowDown,
 } from 'lucide-react';
 import { FamilyTreeData, Gender, Person, PhotoItem, QuickAddRelation, SpouseStatus } from '../types/family';
 import {
@@ -31,6 +33,7 @@ import {
   getChildrenOf,
   getDisplayNameWithNickname,
   getFullName,
+  getSiblingRankInfo,
   getSiblingsOf,
 } from '../utils/familyOps';
 import { calculateAge, formatThaiDate } from '../utils/dateUtils';
@@ -49,6 +52,8 @@ interface PersonDrawerProps {
   onSavePerson: (updated: Person) => void;
   onDeletePerson: (personId: string) => void;
   onSelectPerson: (personId: string) => void;
+  onOpenCoupleDetail?: (personAId: string, personBId: string) => void;
+  onReorderChildren?: (orderedChildIds: string[]) => void;
   onQuickAdd: (anchorId: string, relation: QuickAddRelation) => void;
   onUnlinkParent: (parentId: string, childId: string) => void;
   onUnlinkSpouse: (personAId: string, personBId: string) => void;
@@ -80,6 +85,8 @@ export const PersonDrawer: React.FC<PersonDrawerProps> = ({
   onSavePerson,
   onDeletePerson,
   onSelectPerson,
+  onOpenCoupleDetail,
+  onReorderChildren,
   onQuickAdd,
   onUnlinkParent,
   onUnlinkSpouse,
@@ -111,6 +118,7 @@ export const PersonDrawer: React.FC<PersonDrawerProps> = ({
   const parents = person.parentIds.map((id) => data.members[id]).filter(Boolean);
   const children = getChildrenOf(data.members, person.id);
   const siblings = getSiblingsOf(data.members, person.id);
+  const siblingRank = getSiblingRankInfo(data.members, person.id);
   const age = calculateAge(person.birthDate, person.deathDate, person.isDeceased);
   const gallery = person.gallery ?? [];
 
@@ -754,6 +762,14 @@ export const PersonDrawer: React.FC<PersonDrawerProps> = ({
                     {person.nickname}
                   </span>
                 )}
+                {siblingRank && (
+                  <span
+                    style={{ backgroundColor: 'var(--theme-primary-soft)', color: 'var(--theme-primary)' }}
+                    className="text-[11px] font-semibold px-2 py-0.5 rounded-full"
+                  >
+                    {siblingRank.label}
+                  </span>
+                )}
                 {person.branch && (
                   <span className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full theme-subtle theme-muted-text">
                     <GitBranch className="w-2.5 h-2.5" />
@@ -782,7 +798,6 @@ export const PersonDrawer: React.FC<PersonDrawerProps> = ({
                 {age != null && (
                   <span> · {person.isDeceased ? `สิริอายุ ${age} ปี` : `อายุ ${age} ปี`}</span>
                 )}
-                {person.birthOrder != null && <span> · บุตรคนที่ {person.birthOrder}</span>}
               </p>
             </div>
           </div>
@@ -1130,37 +1145,55 @@ export const PersonDrawer: React.FC<PersonDrawerProps> = ({
 
             {person.spouses.length > 0 && (
               <div className="space-y-1.5">
-                <div className="text-[11px] font-medium theme-muted-text">คู่สมรส</div>
-                <div className="space-y-1.5">
+                <div className="text-[11px] font-medium theme-muted-text">คู่สมรส / ครอบครัว</div>
+                <div className="space-y-2">
                   {person.spouses.map((sp) => {
                     const spouse = data.members[sp.spouseId];
                     if (!spouse) return null;
                     return (
-                      <button
+                      <div
                         key={sp.spouseId}
-                        onClick={() => onSelectPerson(spouse.id)}
-                        className="w-full flex items-center justify-between gap-2 p-2 rounded-xl hover:bg-black/5 transition-colors text-left cursor-pointer"
+                        className="p-2.5 rounded-xl theme-subtle border space-y-2"
                       >
-                        <div className="flex items-center gap-2.5 min-w-0">
-                          <PersonAvatar person={spouse} size="xs" />
-                          <div className="min-w-0">
-                            <div className="text-xs font-medium truncate">
-                              {getDisplayNameWithNickname(spouse)}
-                            </div>
-                            {sp.marriageDate && (
-                              <div className="text-[10.5px] theme-muted-text">
-                                สมรส {formatThaiDate(sp.marriageDate)}
+                        <div className="flex items-center justify-between gap-2">
+                          <button
+                            onClick={() => onSelectPerson(spouse.id)}
+                            className="flex items-center gap-2.5 min-w-0 flex-1 text-left hover:opacity-80 cursor-pointer"
+                          >
+                            <PersonAvatar person={spouse} size="xs" />
+                            <div className="min-w-0">
+                              <div className="text-xs font-medium truncate">
+                                {getDisplayNameWithNickname(spouse)}
                               </div>
-                            )}
-                          </div>
+                              <div className="text-[10.5px] theme-muted-text truncate">
+                                {[
+                                  sp.familyName,
+                                  sp.marriageDate ? `สมรส ${formatThaiDate(sp.marriageDate)}` : '',
+                                ]
+                                  .filter(Boolean)
+                                  .join(' · ') || SPOUSE_STATUS_LABELS[sp.status]}
+                              </div>
+                            </div>
+                          </button>
+
+                          {onOpenCoupleDetail && (
+                            <button
+                              type="button"
+                              onClick={() => onOpenCoupleDetail(person.id, spouse.id)}
+                              style={{
+                                backgroundColor: 'var(--theme-bg-surface)',
+                                borderColor: 'var(--theme-border)',
+                                color: 'var(--theme-primary)',
+                              }}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border text-[10.5px] font-semibold shrink-0 hover:opacity-85 cursor-pointer"
+                              title="ตั้งค่ารายละเอียดคู่ครอบครัวนี้"
+                            >
+                              <Settings2 className="w-3 h-3" />
+                              {canEdit ? 'ตั้งค่าคู่' : 'รายละเอียด'}
+                            </button>
+                          )}
                         </div>
-                        <span
-                          style={{ backgroundColor: 'var(--theme-accent-soft)', color: 'var(--theme-accent)' }}
-                          className="text-[10.5px] px-2 py-0.5 rounded-full shrink-0"
-                        >
-                          {SPOUSE_STATUS_LABELS[sp.status]}
-                        </span>
-                      </button>
+                      </div>
                     );
                   })}
                 </div>
@@ -1170,46 +1203,107 @@ export const PersonDrawer: React.FC<PersonDrawerProps> = ({
             {siblings.length > 0 && (
               <div className="space-y-1.5">
                 <div className="text-[11px] font-medium theme-muted-text">
-                  พี่น้อง ({siblings.length} คน)
+                  พี่น้องร่วมพ่อแม่ (รวม {siblings.length + 1} คน)
                 </div>
                 <div className="flex flex-wrap gap-1.5">
-                  {siblings.map((s) => (
-                    <button
-                      key={s.id}
-                      onClick={() => onSelectPerson(s.id)}
-                      className="inline-flex items-center gap-1.5 pl-1 pr-2.5 py-1 rounded-full theme-subtle border hover:opacity-85 text-xs transition-opacity cursor-pointer"
-                    >
-                      <PersonAvatar person={s} size="xs" />
-                      <span>{s.nickname || s.firstName}</span>
-                    </button>
-                  ))}
+                  {siblings.map((s) => {
+                    const sRank = getSiblingRankInfo(data.members, s.id);
+                    return (
+                      <button
+                        key={s.id}
+                        onClick={() => onSelectPerson(s.id)}
+                        className="inline-flex items-center gap-1.5 pl-1 pr-2.5 py-1 rounded-full theme-subtle border hover:opacity-85 text-xs transition-opacity cursor-pointer"
+                      >
+                        <PersonAvatar person={s} size="xs" />
+                        {sRank && (
+                          <span
+                            style={{ backgroundColor: 'var(--theme-primary)', color: '#fff' }}
+                            className="text-[9.5px] font-bold px-1.5 py-0.2 rounded-full"
+                          >
+                            คนที่ {sRank.order}
+                          </span>
+                        )}
+                        <span>{s.nickname || s.firstName}</span>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
             )}
 
             {children.length > 0 && (
               <div className="space-y-1.5">
-                <div className="text-[11px] font-medium theme-muted-text">
-                  บุตร ({children.length} คน)
+                <div className="flex items-center justify-between">
+                  <div className="text-[11px] font-medium theme-muted-text">
+                    บุตร เรียงตามลำดับพี่น้อง ({children.length} คน)
+                  </div>
+                  {canEdit && children.length > 1 && onReorderChildren && (
+                    <span className="text-[10px] theme-muted-text">กด ▲/▼ สลับลำดับ</span>
+                  )}
                 </div>
                 <div className="space-y-1.5">
-                  {children.map((c) => (
-                    <button
-                      key={c.id}
-                      onClick={() => onSelectPerson(c.id)}
-                      className="w-full flex items-center gap-2.5 p-2 rounded-xl hover:bg-black/5 transition-colors text-left cursor-pointer"
-                    >
-                      <PersonAvatar person={c} size="xs" />
-                      <div className="min-w-0">
-                        <div className="text-xs font-medium truncate">
-                          {getDisplayNameWithNickname(c)}
-                        </div>
-                        {c.occupation && (
-                          <div className="text-[10.5px] theme-muted-text truncate">{c.occupation}</div>
+                  {children.map((c, idx) => {
+                    const cRank = getSiblingRankInfo(data.members, c.id);
+                    const move = (dir: -1 | 1) => {
+                      if (!onReorderChildren) return;
+                      const target = idx + dir;
+                      if (target < 0 || target >= children.length) return;
+                      const nextIds = children.map((ch) => ch.id);
+                      const [moved] = nextIds.splice(idx, 1);
+                      nextIds.splice(target, 0, moved);
+                      onReorderChildren(nextIds);
+                    };
+                    return (
+                      <div
+                        key={c.id}
+                        className="flex items-center justify-between gap-2 p-2 rounded-xl theme-subtle border"
+                      >
+                        <button
+                          onClick={() => onSelectPerson(c.id)}
+                          className="flex items-center gap-2 min-w-0 flex-1 text-left hover:opacity-80 cursor-pointer"
+                        >
+                          <span
+                            style={{ backgroundColor: 'var(--theme-primary)', color: '#fff' }}
+                            className="w-5 h-5 rounded-full text-[10px] font-bold flex items-center justify-center shrink-0"
+                          >
+                            {c.birthOrder ?? idx + 1}
+                          </span>
+                          <PersonAvatar person={c} size="xs" />
+                          <div className="min-w-0">
+                            <div className="text-xs font-medium truncate">
+                              {getDisplayNameWithNickname(c)}
+                            </div>
+                            <div className="text-[10.5px] theme-muted-text truncate">
+                              {cRank?.label || `คนที่ ${idx + 1}`}
+                              {c.occupation ? ` · ${c.occupation}` : ''}
+                            </div>
+                          </div>
+                        </button>
+                        {canEdit && children.length > 1 && onReorderChildren && (
+                          <div className="flex items-center gap-0.5 shrink-0">
+                            <button
+                              type="button"
+                              disabled={idx === 0}
+                              onClick={() => move(-1)}
+                              title="เลื่อนขึ้นเป็นพี่"
+                              className="p-1 rounded-lg hover:bg-black/10 disabled:opacity-30 cursor-pointer"
+                            >
+                              <ArrowUp className="w-3 h-3" />
+                            </button>
+                            <button
+                              type="button"
+                              disabled={idx === children.length - 1}
+                              onClick={() => move(1)}
+                              title="เลื่อนลงเป็นน้อง"
+                              className="p-1 rounded-lg hover:bg-black/10 disabled:opacity-30 cursor-pointer"
+                            >
+                              <ArrowDown className="w-3 h-3" />
+                            </button>
+                          </div>
                         )}
                       </div>
-                    </button>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             )}

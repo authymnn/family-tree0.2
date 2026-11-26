@@ -1,4 +1,4 @@
-import { FamilyTreeData, Person, SpouseStatus } from '../types/family';
+import { CardStyle, FamilyTreeData, Person, SpouseStatus, TreeOrientation } from '../types/family';
 import { compareBirthDates } from './dateUtils';
 
 export interface LayoutConfig {
@@ -10,23 +10,68 @@ export interface LayoutConfig {
   forestGap: number;
 }
 
-export const NORMAL_LAYOUT: LayoutConfig = {
-  cardWidth: 212,
-  cardHeight: 108,
-  spouseGap: 28,
-  siblingGap: 34,
-  generationGap: 78,
-  forestGap: 96,
-};
+export function getLayoutConfig(cardStyle: CardStyle, orientation: TreeOrientation): LayoutConfig {
+  if (orientation === 'left-right') {
+    if (cardStyle === 'photo-only') {
+      return {
+        cardWidth: 158,
+        cardHeight: 54,
+        spouseGap: 18,
+        siblingGap: 14,
+        generationGap: 68,
+        forestGap: 54,
+      };
+    }
+    if (cardStyle === 'compact') {
+      return {
+        cardWidth: 180,
+        cardHeight: 68,
+        spouseGap: 20,
+        siblingGap: 16,
+        generationGap: 72,
+        forestGap: 60,
+      };
+    }
+    return {
+      cardWidth: 214,
+      cardHeight: 96,
+      spouseGap: 24,
+      siblingGap: 22,
+      generationGap: 84,
+      forestGap: 72,
+    };
+  }
 
-export const COMPACT_LAYOUT: LayoutConfig = {
-  cardWidth: 168,
-  cardHeight: 74,
-  spouseGap: 20,
-  siblingGap: 22,
-  generationGap: 58,
-  forestGap: 72,
-};
+  // Vertical trees (top-down & bottom-up)
+  if (cardStyle === 'photo-only') {
+    return {
+      cardWidth: 112,
+      cardHeight: 116,
+      spouseGap: 24,
+      siblingGap: 18,
+      generationGap: 68,
+      forestGap: 68,
+    };
+  }
+  if (cardStyle === 'compact') {
+    return {
+      cardWidth: 166,
+      cardHeight: 74,
+      spouseGap: 22,
+      siblingGap: 20,
+      generationGap: 60,
+      forestGap: 72,
+    };
+  }
+  return {
+    cardWidth: 212,
+    cardHeight: 108,
+    spouseGap: 28,
+    siblingGap: 30,
+    generationGap: 78,
+    forestGap: 92,
+  };
+}
 
 export interface PositionedCard {
   person: Person;
@@ -70,6 +115,8 @@ export interface TreeLayoutResult {
   height: number;
   maxGeneration: number;
   generationMap: Record<string, number>;
+  orientation: TreeOrientation;
+  cardStyle: CardStyle;
 }
 
 interface FamilyUnit {
@@ -78,11 +125,11 @@ interface FamilyUnit {
   spouseIds: string[];
   children: FamilyUnit[];
   generation: number;
-  coupleWidth: number;
-  subtreeWidth: number;
-  x: number; // left of subtree
-  coupleX: number; // left of couple block
-  y: number;
+  coupleBreadth: number;  // width for vertical trees, height for left-right trees
+  subtreeBreadth: number;
+  breadthStart: number;   // x for vertical trees, y for left-right trees
+  coupleStart: number;    // coupleX for vertical trees, coupleY for left-right trees
+  depthPos: number;       // y for vertical trees, x for left-right trees
   hasChildren: boolean;
   isCollapsed: boolean;
   hiddenDescendantCount: number;
@@ -93,6 +140,8 @@ function sortPeople(people: Person[]): Person[] {
     if (a.birthOrder != null && b.birthOrder != null && a.birthOrder !== b.birthOrder) {
       return a.birthOrder - b.birthOrder;
     }
+    if (a.birthOrder != null && b.birthOrder == null) return -1;
+    if (a.birthOrder == null && b.birthOrder != null) return 1;
     const cmp = compareBirthDates(a.birthDate, b.birthDate);
     if (cmp !== 0) return cmp;
     return a.firstName.localeCompare(b.firstName, 'th');
@@ -126,18 +175,25 @@ function countAllDescendants(
 }
 
 /**
- * Compute clean, zero-overlap layout for a large extended family tree (supporting spouses,
- * multiple generations, collapse/expand, focus subtree, and disconnected clusters).
+ * Compute clean, zero-overlap layout for a large extended family tree supporting:
+ * - 3 card styles: 'detailed', 'compact', 'photo-only'
+ * - 3 orientations: 'top-down', 'bottom-up' (growing tree from roots up), 'left-right' (vertical sibling stacks!)
+ * - collapse/expand subtrees, focus root, and multi-root forests.
  */
 export function computeFamilyTreeLayout(
   data: FamilyTreeData,
   options: {
-    compact?: boolean;
+    cardStyle?: CardStyle;
+    compact?: boolean; // legacy shorthand
+    orientation?: TreeOrientation;
     collapsedIds?: Set<string>;
     focusRootId?: string | null;
   } = {}
 ): TreeLayoutResult {
-  const cfg = options.compact ? COMPACT_LAYOUT : NORMAL_LAYOUT;
+  const cardStyle: CardStyle =
+    options.cardStyle ?? (options.compact ? 'compact' : 'detailed');
+  const orientation: TreeOrientation = options.orientation ?? 'top-down';
+  const cfg = getLayoutConfig(cardStyle, orientation);
   const collapsedIds = options.collapsedIds ?? new Set<string>();
   const members = data.members;
   const allMembers = Object.values(members);
@@ -151,10 +207,15 @@ export function computeFamilyTreeLayout(
       height: 500,
       maxGeneration: 0,
       generationMap: {},
+      orientation,
+      cardStyle,
     };
   }
 
-  // Helper: get children of any set of parent IDs
+  const isHorizontalFlow = orientation === 'left-right';
+  const unitItemBreadth = isHorizontalFlow ? cfg.cardHeight : cfg.cardWidth;
+  const unitItemDepth = isHorizontalFlow ? cfg.cardWidth : cfg.cardHeight;
+
   const getChildrenOfUnit = (parentIds: string[], alreadyPlaced: Set<string>): Person[] => {
     const pSet = new Set(parentIds);
     const matched = allMembers.filter(
@@ -163,7 +224,6 @@ export function computeFamilyTreeLayout(
     return sortPeople(matched);
   };
 
-  // Determine ordered root candidates
   const placed = new Set<string>();
   const rootUnits: FamilyUnit[] = [];
 
@@ -172,7 +232,6 @@ export function computeFamilyTreeLayout(
     if (!primary || placed.has(primaryId)) return null;
     placed.add(primaryId);
 
-    // Attach spouses who haven't been placed yet
     const attachedSpouses: string[] = [];
     for (const sp of primary.spouses) {
       if (members[sp.spouseId] && !placed.has(sp.spouseId)) {
@@ -186,7 +245,7 @@ export function computeFamilyTreeLayout(
     const hasChildren = directChildren.length > 0;
     const isCollapsed = hasChildren && collapsedIds.has(primaryId);
 
-    let childUnits: FamilyUnit[] = [];
+    const childUnits: FamilyUnit[] = [];
     let hiddenDescendantCount = 0;
 
     if (isCollapsed) {
@@ -199,7 +258,8 @@ export function computeFamilyTreeLayout(
     }
 
     const memberCount = 1 + attachedSpouses.length;
-    const coupleWidth = memberCount * cfg.cardWidth + Math.max(0, memberCount - 1) * cfg.spouseGap;
+    const coupleBreadth =
+      memberCount * unitItemBreadth + Math.max(0, memberCount - 1) * cfg.spouseGap;
 
     return {
       id: `unit_${primaryId}`,
@@ -207,11 +267,11 @@ export function computeFamilyTreeLayout(
       spouseIds: attachedSpouses,
       children: childUnits,
       generation,
-      coupleWidth,
-      subtreeWidth: coupleWidth,
-      x: 0,
-      coupleX: 0,
-      y: 0,
+      coupleBreadth,
+      subtreeBreadth: coupleBreadth,
+      breadthStart: 0,
+      coupleStart: 0,
+      depthPos: 0,
       hasChildren,
       isCollapsed,
       hiddenDescendantCount,
@@ -222,12 +282,9 @@ export function computeFamilyTreeLayout(
     const focused = buildUnit(options.focusRootId, 1);
     if (focused) rootUnits.push(focused);
   } else {
-    // 1. Prioritize designated rootPersonId if valid and has no parents
     const candidateRoots: Person[] = [];
     if (data.rootPersonId && members[data.rootPersonId]) {
-      const rootP = members[data.rootPersonId];
-      // Walk up to top ancestor if rootPersonId later got parents added
-      let top = rootP;
+      let top = members[data.rootPersonId];
       const seen = new Set<string>([top.id]);
       while (top.parentIds.length > 0) {
         const nextParent = members[top.parentIds[0]];
@@ -238,8 +295,6 @@ export function computeFamilyTreeLayout(
       candidateRoots.push(top);
     }
 
-    // 2. Find true top-level ancestors: people with no parents whose spouse does NOT have parents
-    // (Spouses who married into the family will be attached beside their partner instead of starting a separate root!)
     const noParentMembers = sortPeople(allMembers.filter((m) => m.parentIds.length === 0));
     const trueRoots = noParentMembers.filter((m) => {
       const spouseHasParents = m.spouses.some(
@@ -261,7 +316,6 @@ export function computeFamilyTreeLayout(
       }
     }
 
-    // 3. Safety net: any remaining unplaced members (e.g., isolated or unusual graph)
     for (const m of sortPeople(allMembers)) {
       if (!placed.has(m.id)) {
         const unit = buildUnit(m.id, 1);
@@ -270,49 +324,93 @@ export function computeFamilyTreeLayout(
     }
   }
 
-  // Bottom-up pass: measure subtree widths
+  // Bottom-up pass: measure subtree breadth
   const measureSubtree = (unit: FamilyUnit): number => {
     if (unit.children.length === 0) {
-      unit.subtreeWidth = unit.coupleWidth;
-      return unit.subtreeWidth;
+      unit.subtreeBreadth = unit.coupleBreadth;
+      return unit.subtreeBreadth;
     }
-    let childrenTotalWidth = 0;
+    let childrenTotal = 0;
     for (let i = 0; i < unit.children.length; i++) {
-      childrenTotalWidth += measureSubtree(unit.children[i]);
-      if (i > 0) childrenTotalWidth += cfg.siblingGap;
+      childrenTotal += measureSubtree(unit.children[i]);
+      if (i > 0) childrenTotal += cfg.siblingGap;
     }
-    unit.subtreeWidth = Math.max(unit.coupleWidth, childrenTotalWidth);
-    return unit.subtreeWidth;
+    unit.subtreeBreadth = Math.max(unit.coupleBreadth, childrenTotal);
+    return unit.subtreeBreadth;
   };
 
   for (const root of rootUnits) {
     measureSubtree(root);
   }
 
-  // Top-down pass: assign coordinates
   const PADDING_X = 80;
-  const PADDING_Y = 64;
+  const PADDING_Y = 72;
+  let maxGeneration = 1;
+  let maxDepth = 0;
+  let maxBreadth = 0;
+
+  // Assign abstract (breadth, depth) positions first
+  const assignAbstractPositions = (unit: FamilyUnit, breadthStart: number, depthPos: number) => {
+    unit.breadthStart = breadthStart;
+    unit.depthPos = depthPos;
+    unit.coupleStart = breadthStart + (unit.subtreeBreadth - unit.coupleBreadth) / 2;
+    maxGeneration = Math.max(maxGeneration, unit.generation);
+    maxDepth = Math.max(maxDepth, depthPos + unitItemDepth);
+    maxBreadth = Math.max(maxBreadth, breadthStart + unit.subtreeBreadth);
+
+    if (unit.children.length > 0) {
+      const nextDepth = depthPos + unitItemDepth + cfg.generationGap;
+      let totalChildrenB = 0;
+      for (let i = 0; i < unit.children.length; i++) {
+        totalChildrenB += unit.children[i].subtreeBreadth;
+        if (i > 0) totalChildrenB += cfg.siblingGap;
+      }
+      let cursor = breadthStart + (unit.subtreeBreadth - totalChildrenB) / 2;
+      for (const childUnit of unit.children) {
+        assignAbstractPositions(childUnit, cursor, nextDepth);
+        cursor += childUnit.subtreeBreadth + cfg.siblingGap;
+      }
+    }
+  };
+
+  let forestCursor = isHorizontalFlow ? PADDING_Y : PADDING_X;
+  const initialDepth = isHorizontalFlow ? PADDING_X : PADDING_Y;
+  for (const root of rootUnits) {
+    assignAbstractPositions(root, forestCursor, initialDepth);
+    forestCursor += root.subtreeBreadth + cfg.forestGap;
+  }
+
+  const totalWidth = isHorizontalFlow
+    ? Math.max(820, maxDepth + PADDING_X + 40)
+    : Math.max(820, maxBreadth + PADDING_X);
+  const totalHeight = isHorizontalFlow
+    ? Math.max(540, maxBreadth + PADDING_Y + 40)
+    : Math.max(540, maxDepth + PADDING_Y + 40);
+
   const cards: PositionedCard[] = [];
   const marriageConnectors: MarriageConnector[] = [];
   const parentChildConnectors: ParentChildConnector[] = [];
   const generationMap: Record<string, number> = {};
-  let maxGeneration = 1;
-  let maxRight = 0;
-  let maxBottom = 0;
 
-  const positionUnit = (unit: FamilyUnit, leftX: number, topY: number) => {
-    unit.x = leftX;
-    unit.y = topY;
-    unit.coupleX = leftX + (unit.subtreeWidth - unit.coupleWidth) / 2;
-    maxGeneration = Math.max(maxGeneration, unit.generation);
+  const mapCardCoords = (breadthPos: number, depthPos: number): { x: number; y: number } => {
+    if (orientation === 'left-right') {
+      return { x: depthPos, y: breadthPos };
+    }
+    if (orientation === 'bottom-up') {
+      return { x: breadthPos, y: totalHeight - (depthPos + cfg.cardHeight) };
+    }
+    return { x: breadthPos, y: depthPos };
+  };
 
+  const emitUnit = (unit: FamilyUnit) => {
     const primary = members[unit.primaryId];
     const allUnitIds = [unit.primaryId, ...unit.spouseIds];
 
     allUnitIds.forEach((pid, idx) => {
       const person = members[pid];
-      const cx = unit.coupleX + idx * (cfg.cardWidth + cfg.spouseGap);
-      const cy = topY;
+      const itemBreadth = unit.coupleStart + idx * (unitItemBreadth + cfg.spouseGap);
+      const { x: cx, y: cy } = mapCardCoords(itemBreadth, unit.depthPos);
+
       generationMap[pid] = unit.generation;
       cards.push({
         person,
@@ -327,101 +425,186 @@ export function computeFamilyTreeLayout(
         isCollapsed: idx === 0 && unit.isCollapsed,
         hiddenDescendantCount: idx === 0 ? unit.hiddenDescendantCount : 0,
       });
-      maxRight = Math.max(maxRight, cx + cfg.cardWidth);
-      maxBottom = Math.max(maxBottom, cy + cfg.cardHeight);
 
-      // Marriage connector between adjacent couple cards
       if (idx > 0) {
-        const prevX = unit.coupleX + (idx - 1) * (cfg.cardWidth + cfg.spouseGap);
+        const prevBreadth = unit.coupleStart + (idx - 1) * (unitItemBreadth + cfg.spouseGap);
+        const prevPos = mapCardCoords(prevBreadth, unit.depthPos);
         const spouseLink = primary.spouses.find((s) => s.spouseId === pid);
-        marriageConnectors.push({
-          id: `mar_${unit.primaryId}_${pid}`,
-          personAId: allUnitIds[idx - 1],
-          personBId: pid,
-          x1: prevX + cfg.cardWidth,
-          y1: cy + cfg.cardHeight / 2,
-          x2: cx,
-          y2: cy + cfg.cardHeight / 2,
-          status: spouseLink?.status ?? 'married',
-        });
+
+        if (orientation === 'left-right') {
+          marriageConnectors.push({
+            id: `mar_${unit.primaryId}_${pid}`,
+            personAId: allUnitIds[idx - 1],
+            personBId: pid,
+            x1: prevPos.x + cfg.cardWidth / 2,
+            y1: prevPos.y + cfg.cardHeight,
+            x2: cx + cfg.cardWidth / 2,
+            y2: cy,
+            status: spouseLink?.status ?? 'married',
+          });
+        } else {
+          marriageConnectors.push({
+            id: `mar_${unit.primaryId}_${pid}`,
+            personAId: allUnitIds[idx - 1],
+            personBId: pid,
+            x1: prevPos.x + cfg.cardWidth,
+            y1: cy + cfg.cardHeight / 2,
+            x2: cx,
+            y2: cy + cfg.cardHeight / 2,
+            status: spouseLink?.status ?? 'married',
+          });
+        }
       }
     });
 
     if (unit.children.length > 0) {
-      // Origin point for children connectors: center of couple block (or between first two spouses)
-      const anchorX =
-        unit.spouseIds.length >= 1
-          ? unit.coupleX + cfg.cardWidth + cfg.spouseGap / 2
-          : unit.coupleX + cfg.cardWidth / 2;
-      const anchorY =
-        unit.spouseIds.length >= 1
-          ? topY + cfg.cardHeight / 2
-          : topY + cfg.cardHeight;
-
-      const childrenRowY = topY + cfg.cardHeight + cfg.generationGap;
-      const busY = topY + cfg.cardHeight + cfg.generationGap * 0.48;
-
-      // Center children block under unit.subtreeWidth
-      let totalChildrenW = 0;
-      for (let i = 0; i < unit.children.length; i++) {
-        totalChildrenW += unit.children[i].subtreeWidth;
-        if (i > 0) totalChildrenW += cfg.siblingGap;
-      }
-      let cursorX = leftX + (unit.subtreeWidth - totalChildrenW) / 2;
+      const primaryPos = mapCardCoords(unit.coupleStart, unit.depthPos);
 
       for (const childUnit of unit.children) {
-        positionUnit(childUnit, cursorX, childrenRowY);
+        emitUnit(childUnit);
+        const childPos = mapCardCoords(childUnit.coupleStart, childUnit.depthPos);
 
-        // Child target X: center of child's primary card
-        const childPrimaryX = childUnit.coupleX + cfg.cardWidth / 2;
-        const childTopY = childrenRowY;
+        if (orientation === 'left-right') {
+          // Horizontal flow: Left parent -> Right children stacked vertically
+          const anchorX =
+            unit.spouseIds.length >= 1
+              ? primaryPos.x + cfg.cardWidth / 2
+              : primaryPos.x + cfg.cardWidth;
+          const anchorY =
+            unit.spouseIds.length >= 1
+              ? primaryPos.y + cfg.cardHeight + cfg.spouseGap / 2
+              : primaryPos.y + cfg.cardHeight / 2;
 
-        // Smooth orthogonal SVG path with subtle rounded corners
-        const r = 10;
-        let path: string;
-        if (Math.abs(childPrimaryX - anchorX) < 2) {
-          path = `M ${anchorX} ${anchorY} L ${childPrimaryX} ${childTopY}`;
+          const busX = primaryPos.x + cfg.cardWidth + cfg.generationGap * 0.48;
+          const targetX = childPos.x;
+          const targetY = childPos.y + cfg.cardHeight / 2;
+
+          const r = 10;
+          let path: string;
+          if (Math.abs(targetY - anchorY) < 2) {
+            path = `M ${anchorX} ${anchorY} L ${targetX} ${targetY}`;
+          } else {
+            const dir = targetY > anchorY ? 1 : -1;
+            const cr1 = Math.min(r, Math.abs(targetY - anchorY) / 2, Math.max(2, (busX - anchorX) / 2));
+            const cr2 = Math.min(r, Math.abs(targetY - anchorY) / 2, Math.max(2, (targetX - busX) / 2));
+            path = [
+              `M ${anchorX} ${anchorY}`,
+              `L ${busX - cr1} ${anchorY}`,
+              `Q ${busX} ${anchorY} ${busX} ${anchorY + dir * cr1}`,
+              `L ${busX} ${targetY - dir * cr2}`,
+              `Q ${busX} ${targetY} ${busX + cr2} ${targetY}`,
+              `L ${targetX} ${targetY}`,
+            ].join(' ');
+          }
+
+          parentChildConnectors.push({
+            id: `pc_${unit.id}_${childUnit.primaryId}`,
+            parentIds: allUnitIds,
+            childId: childUnit.primaryId,
+            path,
+            midX: busX,
+            midY: (anchorY + targetY) / 2,
+          });
+        } else if (orientation === 'bottom-up') {
+          // Bottom-up growing tree: Parent below -> Children above
+          const anchorX =
+            unit.spouseIds.length >= 1
+              ? primaryPos.x + cfg.cardWidth + cfg.spouseGap / 2
+              : primaryPos.x + cfg.cardWidth / 2;
+          const anchorY =
+            unit.spouseIds.length >= 1
+              ? primaryPos.y + cfg.cardHeight / 2
+              : primaryPos.y;
+
+          const busY = primaryPos.y - cfg.generationGap * 0.48;
+          const childPrimaryX = childPos.x + cfg.cardWidth / 2;
+          const childBottomY = childPos.y + cfg.cardHeight;
+
+          const r = 10;
+          let path: string;
+          if (Math.abs(childPrimaryX - anchorX) < 2) {
+            path = `M ${anchorX} ${anchorY} L ${childPrimaryX} ${childBottomY}`;
+          } else {
+            const dir = childPrimaryX > anchorX ? 1 : -1;
+            const cr1 = Math.min(r, Math.abs(childPrimaryX - anchorX) / 2, Math.max(2, (anchorY - busY) / 2));
+            const cr2 = Math.min(r, Math.abs(childPrimaryX - anchorX) / 2, Math.max(2, (busY - childBottomY) / 2));
+            path = [
+              `M ${anchorX} ${anchorY}`,
+              `L ${anchorX} ${busY + cr1}`,
+              `Q ${anchorX} ${busY} ${anchorX + dir * cr1} ${busY}`,
+              `L ${childPrimaryX - dir * cr2} ${busY}`,
+              `Q ${childPrimaryX} ${busY} ${childPrimaryX} ${busY - cr2}`,
+              `L ${childPrimaryX} ${childBottomY}`,
+            ].join(' ');
+          }
+
+          parentChildConnectors.push({
+            id: `pc_${unit.id}_${childUnit.primaryId}`,
+            parentIds: allUnitIds,
+            childId: childUnit.primaryId,
+            path,
+            midX: (anchorX + childPrimaryX) / 2,
+            midY: busY,
+          });
         } else {
-          const dir = childPrimaryX > anchorX ? 1 : -1;
-          const cornerR = Math.min(r, Math.abs(childPrimaryX - anchorX) / 2, (busY - anchorY) / 2);
-          const cornerR2 = Math.min(r, Math.abs(childPrimaryX - anchorX) / 2, (childTopY - busY) / 2);
-          path = [
-            `M ${anchorX} ${anchorY}`,
-            `L ${anchorX} ${busY - cornerR}`,
-            `Q ${anchorX} ${busY} ${anchorX + dir * cornerR} ${busY}`,
-            `L ${childPrimaryX - dir * cornerR2} ${busY}`,
-            `Q ${childPrimaryX} ${busY} ${childPrimaryX} ${busY + cornerR2}`,
-            `L ${childPrimaryX} ${childTopY}`,
-          ].join(' ');
+          // Classic Top-Down
+          const anchorX =
+            unit.spouseIds.length >= 1
+              ? primaryPos.x + cfg.cardWidth + cfg.spouseGap / 2
+              : primaryPos.x + cfg.cardWidth / 2;
+          const anchorY =
+            unit.spouseIds.length >= 1
+              ? primaryPos.y + cfg.cardHeight / 2
+              : primaryPos.y + cfg.cardHeight;
+
+          const busY = primaryPos.y + cfg.cardHeight + cfg.generationGap * 0.48;
+          const childPrimaryX = childPos.x + cfg.cardWidth / 2;
+          const childTopY = childPos.y;
+
+          const r = 10;
+          let path: string;
+          if (Math.abs(childPrimaryX - anchorX) < 2) {
+            path = `M ${anchorX} ${anchorY} L ${childPrimaryX} ${childTopY}`;
+          } else {
+            const dir = childPrimaryX > anchorX ? 1 : -1;
+            const cr1 = Math.min(r, Math.abs(childPrimaryX - anchorX) / 2, Math.max(2, (busY - anchorY) / 2));
+            const cr2 = Math.min(r, Math.abs(childPrimaryX - anchorX) / 2, Math.max(2, (childTopY - busY) / 2));
+            path = [
+              `M ${anchorX} ${anchorY}`,
+              `L ${anchorX} ${busY - cr1}`,
+              `Q ${anchorX} ${busY} ${anchorX + dir * cr1} ${busY}`,
+              `L ${childPrimaryX - dir * cr2} ${busY}`,
+              `Q ${childPrimaryX} ${busY} ${childPrimaryX} ${busY + cr2}`,
+              `L ${childPrimaryX} ${childTopY}`,
+            ].join(' ');
+          }
+
+          parentChildConnectors.push({
+            id: `pc_${unit.id}_${childUnit.primaryId}`,
+            parentIds: allUnitIds,
+            childId: childUnit.primaryId,
+            path,
+            midX: (anchorX + childPrimaryX) / 2,
+            midY: busY,
+          });
         }
-
-        parentChildConnectors.push({
-          id: `pc_${unit.id}_${childUnit.primaryId}`,
-          parentIds: allUnitIds,
-          childId: childUnit.primaryId,
-          path,
-          midX: (anchorX + childPrimaryX) / 2,
-          midY: busY,
-        });
-
-        cursorX += childUnit.subtreeWidth + cfg.siblingGap;
       }
     }
   };
 
-  let forestCursorX = PADDING_X;
   for (const root of rootUnits) {
-    positionUnit(root, forestCursorX, PADDING_Y);
-    forestCursorX += root.subtreeWidth + cfg.forestGap;
+    emitUnit(root);
   }
 
   return {
     cards,
     marriageConnectors,
     parentChildConnectors,
-    width: Math.max(800, maxRight + PADDING_X),
-    height: Math.max(520, maxBottom + PADDING_Y + 40),
+    width: totalWidth,
+    height: totalHeight,
     maxGeneration,
     generationMap,
+    orientation,
+    cardStyle,
   };
 }
