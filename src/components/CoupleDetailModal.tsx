@@ -10,10 +10,13 @@ import {
   ArrowUp,
   ArrowDown,
   StickyNote,
+  Palette,
+  Shuffle,
 } from 'lucide-react';
 import { FamilyTreeData, SpouseStatus } from '../types/family';
 import { ThemePalette } from '../utils/themes';
 import {
+  FAMILY_COLOR_SWATCHES,
   getCoupleUnits,
   getDisplayNameWithNickname,
   getSiblingRankInfo,
@@ -34,6 +37,7 @@ interface CoupleDetailModalProps {
     details: {
       status: SpouseStatus;
       familyName?: string;
+      color?: string;
       marriageDate?: string;
       marriagePlace?: string;
       residence?: string;
@@ -70,6 +74,7 @@ export const CoupleDetailModal: React.FC<CoupleDetailModalProps> = ({
 
   const [status, setStatus] = useState<SpouseStatus>(unit?.link.status ?? 'married');
   const [familyName, setFamilyName] = useState(unit?.link.familyName || '');
+  const [color, setColor] = useState(unit?.color || FAMILY_COLOR_SWATCHES[0]);
   const [marriageDate, setMarriageDate] = useState(unit?.link.marriageDate || '');
   const [marriagePlace, setMarriagePlace] = useState(unit?.link.marriagePlace || '');
   const [residence, setResidence] = useState(unit?.link.residence || '');
@@ -89,12 +94,19 @@ export const CoupleDetailModal: React.FC<CoupleDetailModalProps> = ({
     onSaveDetails(personA.id, personB.id, {
       status,
       familyName,
+      color,
       marriageDate,
       marriagePlace,
       residence,
       note,
     });
     onClose();
+  };
+
+  const handleRandomColor = () => {
+    const others = FAMILY_COLOR_SWATCHES.filter((c) => c !== color);
+    const pick = others[Math.floor(Math.random() * others.length)] || FAMILY_COLOR_SWATCHES[0];
+    setColor(pick);
   };
 
   const moveChild = (idx: number, direction: -1 | 1) => {
@@ -121,6 +133,9 @@ export const CoupleDetailModal: React.FC<CoupleDetailModalProps> = ({
         className="w-full max-w-xl rounded-2xl shadow-2xl border overflow-hidden animate-fade-in"
         onClick={(e) => e.stopPropagation()}
       >
+        {/* Top Color Banner Strip */}
+        <div style={{ backgroundColor: color }} className="h-2 w-full" />
+
         {/* Header with Couple Avatars */}
         <div
           style={{ backgroundColor: palette.bgSubtle, borderColor: palette.border }}
@@ -155,10 +170,10 @@ export const CoupleDetailModal: React.FC<CoupleDetailModalProps> = ({
         <form onSubmit={handleSubmit} className="p-6 space-y-5 max-h-[78vh] overflow-y-auto">
           {/* Quick Couple Summary Pill */}
           <div
-            style={{ backgroundColor: palette.accentSoft, borderColor: palette.border }}
-            className="px-4 py-3 rounded-xl border flex flex-wrap items-center justify-between gap-2 text-xs"
+            style={{ backgroundColor: palette.bgSubtle, borderColor: color }}
+            className="px-4 py-3 rounded-xl border-l-4 flex flex-wrap items-center justify-between gap-2 text-xs"
           >
-            <div className="flex items-center gap-2 font-semibold" style={{ color: palette.accent }}>
+            <div className="flex items-center gap-2 font-semibold" style={{ color }}>
               <Heart className="w-4 h-4 fill-current" />
               <span>{STATUS_LABELS[status]}</span>
               {marriageDate && (
@@ -171,6 +186,64 @@ export const CoupleDetailModal: React.FC<CoupleDetailModalProps> = ({
             <span style={{ color: palette.textMuted }} className="font-medium">
               บุตร {children.length} คน
             </span>
+          </div>
+
+          {/* Per-Family Color Picker */}
+          <div
+            style={{ backgroundColor: palette.bgSubtle, borderColor: palette.border }}
+            className="p-3.5 rounded-xl border space-y-2.5"
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold flex items-center gap-1.5">
+                <Palette className="w-3.5 h-3.5" style={{ color }} />
+                สีประจำครอบครัวคู่นี้ (แสดงบนเส้นเชื่อม & แดชบอร์ด)
+              </span>
+              {canEdit && (
+                <button
+                  type="button"
+                  onClick={handleRandomColor}
+                  className="inline-flex items-center gap-1 text-[11px] font-medium hover:underline cursor-pointer"
+                  style={{ color }}
+                >
+                  <Shuffle className="w-3 h-3" />
+                  สุ่มสีใหม่
+                </button>
+              )}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {FAMILY_COLOR_SWATCHES.map((swatch) => (
+                <button
+                  key={swatch}
+                  type="button"
+                  disabled={!canEdit}
+                  onClick={() => setColor(swatch)}
+                  style={{
+                    backgroundColor: swatch,
+                    boxShadow:
+                      color.toLowerCase() === swatch.toLowerCase()
+                        ? `0 0 0 2px ${palette.bgSurface}, 0 0 0 4px ${swatch}`
+                        : undefined,
+                  }}
+                  className="w-6 h-6 rounded-full transition-transform hover:scale-110 cursor-pointer disabled:cursor-default"
+                  title={swatch}
+                />
+              ))}
+              {canEdit && (
+                <label
+                  title="เลือกสีเองตามใจชอบ"
+                  className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border text-[11px] font-medium cursor-pointer"
+                  style={{ borderColor: palette.border, backgroundColor: palette.bgSurface }}
+                >
+                  <input
+                    type="color"
+                    value={color}
+                    onChange={(e) => setColor(e.target.value)}
+                    className="w-4 h-4 border-0 bg-transparent cursor-pointer"
+                  />
+                  เลือกเอง
+                </label>
+              )}
+            </div>
           </div>
 
           {/* Household Settings Fields */}

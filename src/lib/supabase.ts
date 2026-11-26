@@ -1,5 +1,5 @@
 import { createClient, RealtimeChannel, SupabaseClient } from '@supabase/supabase-js';
-import { FamilyTreeData, ThemeSettings } from '../types/family';
+import { FamilyTreeData, SharedDisplayPreset, ThemeSettings } from '../types/family';
 import { EditAccessMode, ViewAccessMode } from '../types/access';
 
 function sanitizeEnvValue(raw: string | undefined, expectedKeyPrefix: string): string {
@@ -59,7 +59,7 @@ export interface FetchCloudTreeResponse {
   locked_view?: boolean;
   clan_name?: string;
   tree_data?: FamilyTreeData;
-  theme_settings?: ThemeSettings | null;
+  theme_settings?: SharedDisplayPreset | ThemeSettings | null;
   view_mode: ViewAccessMode;
   edit_mode: EditAccessMode;
   is_admin?: boolean;
@@ -117,7 +117,7 @@ export async function fetchCloudFamilyTree(params: {
 
 export async function saveCloudFamilyTree(params: {
   treeData: FamilyTreeData;
-  themeSettings?: ThemeSettings;
+  themeSettings?: SharedDisplayPreset | ThemeSettings;
   editPin?: string;
   adminPin?: string;
   editorName?: string;

@@ -14,6 +14,8 @@ import {
   LogOut,
   Check,
   UploadCloud,
+  MonitorSmartphone,
+  Send,
 } from 'lucide-react';
 import { AccessState, CloudSyncStatus, EditAccessMode, ViewAccessMode } from '../types/access';
 import { ThemePalette } from '../utils/themes';
@@ -24,6 +26,7 @@ interface AdminAccessModalProps {
   cloudStatus: CloudSyncStatus;
   lastSyncedAt?: string;
   palette: ThemePalette;
+  currentDisplaySummary: string;
   onClose: () => void;
   onLoginAdmin: (pin: string) => Promise<{ ok: boolean; error?: string }>;
   onLogoutAdmin: () => void;
@@ -35,6 +38,7 @@ interface AdminAccessModalProps {
     newEditPin?: string;
     newAdminPin?: string;
   }) => Promise<{ ok: boolean; error?: string }>;
+  onPushDisplayPresetToAll: () => Promise<{ ok: boolean; error?: string }>;
   onManualSyncPull: () => Promise<void>;
   onManualSyncPush: () => Promise<void>;
 }
@@ -44,11 +48,13 @@ export const AdminAccessModal: React.FC<AdminAccessModalProps> = ({
   cloudStatus,
   lastSyncedAt,
   palette,
+  currentDisplaySummary,
   onClose,
   onLoginAdmin,
   onLogoutAdmin,
   onUnlockEditPin,
   onSaveAccessRules,
+  onPushDisplayPresetToAll,
   onManualSyncPull,
   onManualSyncPush,
 }) => {
@@ -468,7 +474,48 @@ export const AdminAccessModal: React.FC<AdminAccessModalProps> = ({
                 )}
               </div>
 
-              {/* 3. Optional Change Admin PIN */}
+              {/* 3. Broadcast Admin's Current Display Preset to All Family Devices */}
+              <div
+                style={{ backgroundColor: palette.primarySoft, borderColor: palette.primary }}
+                className="p-4 rounded-xl border space-y-2.5"
+              >
+                <div className="flex items-start gap-2.5">
+                  <MonitorSmartphone className="w-4 h-4 mt-0.5 shrink-0" style={{ color: palette.primary }} />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-bold" style={{ color: palette.primary }}>
+                      3. ส่งรูปแบบหน้าจอปัจจุบันให้ทุกคนดูตาม
+                    </div>
+                    <p style={{ color: palette.textMuted }} className="text-[11px] mt-0.5 leading-relaxed">
+                      รูปแบบที่คุณกำลังดูอยู่ตอนนี้: <strong>{currentDisplaySummary}</strong>
+                      <br />
+                      กดปุ่มด้านล่างเพื่อส่งธีม พื้นหลัง รูปแบบการ์ด และทิศทางผังนี้ไปที่มือถือ/คอมของทุกคนทันที (หลังจากนั้นแต่ละคนยังปรับของตัวเองต่อได้)
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={async () => {
+                    setBusy(true);
+                    setErr('');
+                    setMsg('');
+                    const res = await onPushDisplayPresetToAll();
+                    setBusy(false);
+                    if (!res.ok) {
+                      setErr(res.error || 'ส่งรูปแบบการแสดงผลไม่สำเร็จ');
+                    } else {
+                      setMsg('ส่งรูปแบบการแสดงผลปัจจุบันให้ทุกเครื่องเรียบร้อยแล้ว!');
+                    }
+                  }}
+                  style={{ backgroundColor: palette.primary }}
+                  className="w-full py-2 rounded-xl text-white text-xs font-semibold inline-flex items-center justify-center gap-1.5 hover:opacity-90 disabled:opacity-50 cursor-pointer"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  ส่งรูปแบบนี้ให้ทุกคนดูตามทันที
+                </button>
+              </div>
+
+              {/* 4. Optional Change Admin PIN */}
               <div style={{ borderColor: palette.border }} className="pt-3 border-t space-y-1.5">
                 <label className="block text-xs font-semibold">
                   เปลี่ยนรหัสผ่านแอดมิน (เว้นว่างถ้าไม่ต้องการเปลี่ยน)

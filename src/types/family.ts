@@ -6,6 +6,7 @@ export interface SpouseLink {
   spouseId: string;
   status: SpouseStatus;
   familyName?: string;     // ชื่อบ้าน / ชื่อครอบครัว เช่น "บ้านบางรัก", "เรือนสวนเชียงใหม่"
+  color?: string;          // สีประจำครอบครัวคู่นี้ (ถ้าไม่ตั้ง ระบบจะสุ่มให้อัตโนมัติ)
   marriageDate?: string;   // YYYY-MM-DD or YYYY
   marriagePlace?: string;  // สถานที่แต่งงาน / จดทะเบียนสมรส
   residence?: string;      // ที่อยู่ของครอบครัวคู่นี้
@@ -77,4 +78,11 @@ export interface ThemeSettings {
   customBgImage?: string;  // Data URL of user-uploaded background image
   bgBlur: number;          // 0 - 18 px
   bgOpacity: number;       // 0.1 - 1.0
+}
+
+export interface SharedDisplayPreset {
+  themeSettings: ThemeSettings;
+  cardStyle: CardStyle;
+  orientation: TreeOrientation;
+  pushedAt: string;        // ISO timestamp so clients apply once per admin push
 }

@@ -1,6 +1,7 @@
 import { CardStyle, FamilyTreeData, TreeOrientation } from '../types/family';
 import { computeFamilyTreeLayout } from './treeLayout';
 import { calculateAge, formatYearSpan } from './dateUtils';
+import { getCoupleColor, getUnitFamilyColor } from './familyOps';
 import { THEME_PRESETS, ThemePalette } from './themes';
 
 function drawRoundedRect(
@@ -91,23 +92,26 @@ export async function exportTreeAsPng(
   ctx.save();
   ctx.translate(0, headerHeight);
 
-  // Parent-child connectors
-  ctx.strokeStyle = palette.connectorLine;
-  ctx.lineWidth = 1.8;
+  // Parent-child connectors (thick, crisp, family-colored!)
+  ctx.lineWidth = 2.8;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
   for (const conn of layout.parentChildConnectors) {
+    ctx.strokeStyle = getUnitFamilyColor(data.members, conn.parentIds);
     const p2d = new Path2D(conn.path);
     ctx.stroke(p2d);
   }
 
   // Marriage connectors
   for (const mar of layout.marriageConnectors) {
+    const sp = data.members[mar.personAId]?.spouses.find((s) => s.spouseId === mar.personBId);
+    const pSp = data.members[mar.personBId]?.spouses.find((s) => s.spouseId === mar.personAId);
+    const coupleColor = getCoupleColor(mar.personAId, mar.personBId, sp?.color || pSp?.color);
     ctx.save();
-    ctx.strokeStyle = mar.status === 'divorced' ? '#C2938B' : palette.accent;
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = mar.status === 'divorced' ? '#C2938B' : coupleColor;
+    ctx.lineWidth = 3;
     if (mar.status === 'divorced') {
-      ctx.setLineDash([4, 4]);
+      ctx.setLineDash([5, 4]);
     }
     ctx.beginPath();
     ctx.moveTo(mar.x1, mar.y1);

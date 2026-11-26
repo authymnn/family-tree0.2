@@ -355,13 +355,71 @@ export function getSiblingRankInfo(
   return null;
 }
 
+export const FAMILY_COLOR_SWATCHES: string[] = [
+  '#2E6254', // เขียวพฤกษา
+  '#B5653B', // ดินเผาอบอุ่น
+  '#2D5B88', // น้ำเงินคราม
+  '#8E3B5B', // ทับทิมไวน์
+  '#C27D28', // ทองอำพัน
+  '#1F7A7A', // เขียวศิลาดล
+  '#5B7A3B', // เขียวมะกอก
+  '#6F4B8E', // ม่วงอัญชัน
+  '#C85A4A', // แดงปะการัง
+  '#3F5E96', // ฟ้ายีนส์เข้ม
+  '#8A5A32', // น้ำตาลไม้สัก
+  '#24748F', // น้ำทะเลลึก
+];
+
+/**
+ * Deterministic distinct family color for any couple (or explicit custom color if set).
+ */
+export function getCoupleColor(
+  personAId: string,
+  personBId?: string,
+  explicitColor?: string
+): string {
+  if (explicitColor && explicitColor.trim()) return explicitColor.trim();
+  const key = personBId ? [personAId, personBId].sort().join('::') : personAId;
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) {
+    hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
+  }
+  return FAMILY_COLOR_SWATCHES[hash % FAMILY_COLOR_SWATCHES.length];
+}
+
+/**
+ * Resolve the family color for a parent unit (couple or single parent).
+ */
+export function getUnitFamilyColor(
+  members: Record<string, Person>,
+  parentIds: string[]
+): string {
+  if (parentIds.length === 0) return FAMILY_COLOR_SWATCHES[0];
+  const primary = members[parentIds[0]];
+  if (!primary) return FAMILY_COLOR_SWATCHES[0];
+  if (parentIds.length >= 2) {
+    const partnerId = parentIds[1];
+    const sp = primary.spouses.find((s) => s.spouseId === partnerId);
+    const partnerSp = members[partnerId]?.spouses.find((s) => s.spouseId === primary.id);
+    return getCoupleColor(primary.id, partnerId, sp?.color || partnerSp?.color);
+  }
+  // Single parent: if they have a spouse link with color, use it, else deterministic by parent ID
+  if (primary.spouses.length > 0) {
+    const firstSp = primary.spouses[0];
+    return getCoupleColor(primary.id, firstSp.spouseId, firstSp.color);
+  }
+  return getCoupleColor(primary.id);
+}
+
 export interface CoupleUnitSummary {
   id: string;
   personA: Person;
   personB: Person;
+  color: string;
   link: {
     status: SpouseStatus;
     familyName?: string;
+    color?: string;
     marriageDate?: string;
     marriagePlace?: string;
     residence?: string;
@@ -387,7 +445,6 @@ export function getCoupleUnits(members: Record<string, Person>): CoupleUnitSumma
 
       const partnerSp = partner.spouses.find((s) => s.spouseId === person.id);
 
-      // Prefer bloodline member (one with parents) or male first for consistent ordering
       const [first, second] =
         person.parentIds.length >= partner.parentIds.length
           ? [person, partner]
@@ -396,7 +453,6 @@ export function getCoupleUnits(members: Record<string, Person>): CoupleUnitSumma
       const children = Object.values(members)
         .filter((m) => m.parentIds.includes(first.id) || m.parentIds.includes(second.id))
         .filter((m) => {
-          // If child has 2 parents, only include if both belong to this couple
           if (m.parentIds.length === 2) {
             return m.parentIds.includes(first.id) && m.parentIds.includes(second.id);
           }
@@ -411,13 +467,16 @@ export function getCoupleUnits(members: Record<string, Person>): CoupleUnitSumma
           return a.firstName.localeCompare(b.firstName, 'th');
         });
 
+      const explicitColor = sp.color || partnerSp?.color;
       units.push({
         id: pairKey,
         personA: first,
         personB: second,
+        color: getCoupleColor(first.id, second.id, explicitColor),
         link: {
           status: sp.status || partnerSp?.status || 'married',
           familyName: sp.familyName || partnerSp?.familyName,
+          color: explicitColor,
           marriageDate: sp.marriageDate || partnerSp?.marriageDate,
           marriagePlace: sp.marriagePlace || partnerSp?.marriagePlace,
           residence: sp.residence || partnerSp?.residence,
@@ -441,6 +500,7 @@ export function updateSpouseDetails(
   details: {
     status: SpouseStatus;
     familyName?: string;
+    color?: string;
     marriageDate?: string;
     marriagePlace?: string;
     residence?: string;
@@ -455,6 +515,7 @@ export function updateSpouseDetails(
   const cleanDetails = {
     status: details.status,
     familyName: details.familyName?.trim() || undefined,
+    color: details.color?.trim() || undefined,
     marriageDate: details.marriageDate?.trim() || undefined,
     marriagePlace: details.marriagePlace?.trim() || undefined,
     residence: details.residence?.trim() || undefined,

@@ -40,7 +40,7 @@ export const THEME_PRESETS: Record<ThemePresetId, ThemePalette> = {
     border: '#E5DFD5',
     textMain: '#1C2B26',
     textMuted: '#64716C',
-    connectorLine: '#B9AFA0',
+    connectorLine: '#7E7466',
   },
   indigo: {
     id: 'indigo',
@@ -60,7 +60,7 @@ export const THEME_PRESETS: Record<ThemePresetId, ThemePalette> = {
     border: '#DCE4EE',
     textMain: '#172536',
     textMuted: '#5B6B7C',
-    connectorLine: '#9DB0C5',
+    connectorLine: '#637B96',
   },
   crimson: {
     id: 'crimson',
@@ -80,7 +80,7 @@ export const THEME_PRESETS: Record<ThemePresetId, ThemePalette> = {
     border: '#EADCD6',
     textMain: '#2E1A1F',
     textMuted: '#786066',
-    connectorLine: '#C9B0A8',
+    connectorLine: '#94746C',
   },
   celadon: {
     id: 'celadon',
@@ -100,7 +100,7 @@ export const THEME_PRESETS: Record<ThemePresetId, ThemePalette> = {
     border: '#D5E4E2',
     textMain: '#172D2C',
     textMuted: '#5A7270',
-    connectorLine: '#9FBAB7',
+    connectorLine: '#608884',
   },
   midnight: {
     id: 'midnight',
@@ -120,7 +120,7 @@ export const THEME_PRESETS: Record<ThemePresetId, ThemePalette> = {
     border: '#32423D',
     textMain: '#F1F5F3',
     textMuted: '#9FB0A9',
-    connectorLine: '#50645D',
+    connectorLine: '#7E9990',
   },
 };
 

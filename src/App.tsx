@@ -24,6 +24,7 @@ import {
   FamilyTreeData,
   Person,
   QuickAddRelation,
+  SharedDisplayPreset,
   SpouseStatus,
   ThemeSettings,
   TreeOrientation,
@@ -63,6 +64,7 @@ import {
 } from './utils/themes';
 import {
   fetchCloudFamilyTree,
+  fetchCloudTreeStatus,
   isSupabaseConfigured,
   saveCloudFamilyTree,
   subscribeToCloudSync,
@@ -86,6 +88,7 @@ const STORAGE_KEY = 'thai_family_tree_v1';
 const LOCAL_ACCESS_KEY = 'thai_family_tree_local_access_v1';
 const SESSION_PINS_KEY = 'thai_family_tree_session_pins_v1';
 const VIEW_PREFS_KEY = 'thai_family_tree_view_prefs_v1';
+const APPLIED_PRESET_KEY = 'thai_family_tree_applied_preset_at_v1';
 const MAX_HISTORY = 40;
 
 function loadViewPrefs(): { cardStyle: CardStyle; orientation: TreeOrientation } {
@@ -214,9 +217,12 @@ export const App: React.FC = () => {
 
   // Refs to prevent save loops when applying incoming Realtime updates
   const suppressNextCloudSaveRef = useRef(false);
-  const lastSavedStampRef = useRef<string>('');
+  const lastSavedStampRef = useRef<number>(0);
+  const lastKnownRemoteStampRef = useRef<number>(0);
+  const pendingActivityRef = useRef<string>('อัปเดตข้อมูลผังตระกูล');
   const cloudInitializedRef = useRef(false);
   const saveTimerRef = useRef<number | null>(null);
+  const [realtimeConnected, setRealtimeConnected] = useState(false);
 
   const [view, setView] = useState<ViewMode>('tree');
   const [simpleMode, setSimpleMode] = useState(false);
@@ -266,7 +272,7 @@ export const App: React.FC = () => {
   const showToast = useCallback((text: string, type: 'success' | 'error' = 'success') => {
     setToast({ text, type });
     if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
-    toastTimerRef.current = window.setTimeout(() => setToast(null), 3200);
+    toastTimerRef.current = window.setTimeout(() => setToast(null), 4200);
   }, []);
 
   // Apply CSS custom properties whenever theme changes
@@ -305,6 +311,28 @@ export const App: React.FC = () => {
     }
   }, [data, showToast]);
 
+  // Apply Admin's Broadcast Display Preset ONLY when pushedAt is newer than last applied on this device
+  const maybeApplySharedDisplayPreset = useCallback((rawPreset: unknown): boolean => {
+    if (!rawPreset || typeof rawPreset !== 'object') return false;
+    const preset = rawPreset as Partial<SharedDisplayPreset>;
+    if (!preset.pushedAt || !preset.themeSettings) return false;
+
+    const lastApplied = localStorage.getItem(APPLIED_PRESET_KEY) || '';
+    if (lastApplied && preset.pushedAt <= lastApplied) {
+      return false;
+    }
+
+    setThemeSettings((prev) => ({ ...prev, ...preset.themeSettings }));
+    if (preset.cardStyle) setCardStyle(preset.cardStyle);
+    if (preset.orientation) setOrientation(preset.orientation);
+    try {
+      localStorage.setItem(APPLIED_PRESET_KEY, preset.pushedAt);
+    } catch {
+      // ignore
+    }
+    return true;
+  }, []);
+
   // Pull latest tree + access permissions from Supabase Cloud
   const pullFromCloud = useCallback(
     async (
@@ -334,7 +362,13 @@ export const App: React.FC = () => {
       }
 
       setCloudStatus('synced');
-      if (res.updated_at) setLastSyncedAt(res.updated_at);
+      if (res.updated_at) {
+        setLastSyncedAt(res.updated_at);
+        const ts = Date.parse(res.updated_at);
+        if (!Number.isNaN(ts)) {
+          lastKnownRemoteStampRef.current = Math.max(lastKnownRemoteStampRef.current, ts);
+        }
+      }
 
       setAccess({
         viewMode: res.view_mode,
@@ -350,33 +384,103 @@ export const App: React.FC = () => {
           suppressNextCloudSaveRef.current = true;
           setData(valid);
         }
+        // Only apply theme/layout if Admin explicitly pushed a newer SharedDisplayPreset
+        if (res.theme_settings) {
+          maybeApplySharedDisplayPreset(res.theme_settings);
+        }
       }
 
       cloudInitializedRef.current = true;
       return res;
     },
-    [sessionPins, showToast]
+    [sessionPins, showToast, maybeApplySharedDisplayPreset]
   );
 
-  // Initial Cloud Connect + Realtime Subscription
+  // Format user-friendly Realtime notification toast
+  const notifyRemoteActivity = useCallback(
+    (updatedBy?: string) => {
+      if (!updatedBy || updatedBy === 'family_member' || updatedBy === 'admin') {
+        showToast('ข้อมูลผังตระกูลได้รับการอัปเดตเรียลไทม์แล้ว');
+        return;
+      }
+      if (updatedBy === 'admin_access_change') {
+        showToast('แอดมินได้อัปเดตสิทธิ์การเข้าถึงของผังตระกูลแล้ว');
+        return;
+      }
+      if (updatedBy === 'admin_display_preset') {
+        showToast('แอดมินส่งรูปแบบการแสดงผลใหม่มาให้แล้ว');
+        return;
+      }
+      showToast(`${updatedBy} (ซิงก์เรียลไทม์)`);
+    },
+    [showToast]
+  );
+
+  // Initial Cloud Connect + Dual Realtime Subscription + Mobile Wake-Up + Smart 10s Fallback Poll
   useEffect(() => {
     if (!isSupabaseConfigured) return;
     pullFromCloud(undefined, true);
 
-    const unsubscribe = subscribeToCloudSync((ping) => {
-      // Ignore our own echo within 2 seconds
-      if (ping.updated_at && ping.updated_at === lastSavedStampRef.current) return;
+    const handleIncomingSync = (ping: {
+      updated_at?: string;
+      updated_by?: string;
+      source: 'broadcast' | 'postgres' | 'poll';
+    }) => {
+      const pingTs = ping.updated_at ? Date.parse(ping.updated_at) : Date.now();
+      // Ignore echo of our own save (within 1.5s of our exact save timestamp)
+      if (!Number.isNaN(pingTs) && Math.abs(pingTs - lastSavedStampRef.current) < 1500) {
+        return;
+      }
+      // Deduplicate duplicate broadcast + postgres pings for the same change
+      if (!Number.isNaN(pingTs) && pingTs <= lastKnownRemoteStampRef.current && ping.source !== 'broadcast') {
+        return;
+      }
+      if (!Number.isNaN(pingTs)) {
+        lastKnownRemoteStampRef.current = pingTs;
+      }
+
       pullFromCloud(undefined, true).then((res) => {
-        if (res?.ok && ping.updated_by !== 'admin_access_change') {
-          showToast('ซิงก์ข้อมูลล่าสุดจากสมาชิกในครอบครัวแล้ว');
-        } else if (ping.updated_by === 'admin_access_change') {
-          showToast('แอดมินได้อัปเดตสิทธิ์การเข้าถึงของผังตระกูล');
+        if (res?.ok) {
+          notifyRemoteActivity(ping.updated_by || res.updated_by);
         }
       });
-    });
+    };
 
-    return () => unsubscribe();
-  }, [pullFromCloud, showToast]);
+    const unsubscribe = subscribeToCloudSync(handleIncomingSync, setRealtimeConnected);
+
+    // Lightweight check when returning to the tab or waking up mobile phone
+    const checkLatestStatus = async () => {
+      if (document.visibilityState !== 'visible') return;
+      const status = await fetchCloudTreeStatus();
+      if (!status?.updated_at) return;
+      const remoteTs = Date.parse(status.updated_at);
+      if (
+        !Number.isNaN(remoteTs) &&
+        remoteTs > lastKnownRemoteStampRef.current + 500 &&
+        Math.abs(remoteTs - lastSavedStampRef.current) > 1500
+      ) {
+        handleIncomingSync({
+          updated_at: status.updated_at,
+          updated_by: status.updated_by,
+          source: 'poll',
+        });
+      }
+    };
+
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') {
+        checkLatestStatus();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    const pollId = window.setInterval(checkLatestStatus, 10000);
+
+    return () => {
+      unsubscribe();
+      document.removeEventListener('visibilitychange', onVisible);
+      window.clearInterval(pollId);
+    };
+  }, [pullFromCloud, notifyRemoteActivity]);
 
   // Debounced Auto-Save to Supabase Cloud whenever family data changes (theme & view prefs remain per-device!)
   useEffect(() => {
@@ -393,23 +497,27 @@ export const App: React.FC = () => {
     setCloudStatus('saving');
 
     saveTimerRef.current = window.setTimeout(async () => {
+      const activityMsg = pendingActivityRef.current || 'อัปเดตข้อมูลผังตระกูล';
       const res = await saveCloudFamilyTree({
         treeData: data,
         editPin: sessionPins.editPin,
         adminPin: sessionPins.adminPin,
-        editorName: access.isAdmin ? 'admin' : 'family_member',
+        editorName: activityMsg,
       });
       if (res.ok) {
-        lastSavedStampRef.current = res.updated_at || '';
+        const ts = res.updated_at ? Date.parse(res.updated_at) : Date.now();
+        if (!Number.isNaN(ts)) {
+          lastSavedStampRef.current = ts;
+          lastKnownRemoteStampRef.current = Math.max(lastKnownRemoteStampRef.current, ts);
+        }
         setLastSyncedAt(res.updated_at);
         setCloudStatus('synced');
       } else {
         setCloudStatus('error');
         showToast(res.error || 'บันทึกขึ้น Cloud ไม่สำเร็จ', 'error');
-        // Refresh access state in case admin just locked editing
         pullFromCloud(undefined, true);
       }
-    }, 650);
+    }, 350);
 
     return () => {
       if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
@@ -426,11 +534,12 @@ export const App: React.FC = () => {
   ]);
 
   const commitChange = useCallback(
-    (nextData: FamilyTreeData) => {
+    (nextData: FamilyTreeData, activityMessage = 'อัปเดตข้อมูลผังตระกูล') => {
       if (!access.canEdit) {
         showToast('ผังตระกูลถูกล็อกการแก้ไขอยู่ กรุณาปลดล็อกก่อน', 'error');
         return;
       }
+      pendingActivityRef.current = activityMessage;
       setData((prev) => {
         setPast((p) => [...p.slice(-(MAX_HISTORY - 1)), prev]);
         setFuture([]);
@@ -633,10 +742,14 @@ export const App: React.FC = () => {
       treeData: data,
       editPin: sessionPins.editPin,
       adminPin: sessionPins.adminPin,
-      editorName: access.isAdmin ? 'admin' : 'family_member',
+      editorName: access.isAdmin ? 'แอดมินซิงก์ข้อมูลผังตระกูล' : 'อัปเดตข้อมูลผังตระกูล',
     });
     if (res.ok) {
-      lastSavedStampRef.current = res.updated_at || '';
+      const ts = res.updated_at ? Date.parse(res.updated_at) : Date.now();
+      if (!Number.isNaN(ts)) {
+        lastSavedStampRef.current = ts;
+        lastKnownRemoteStampRef.current = Math.max(lastKnownRemoteStampRef.current, ts);
+      }
       setLastSyncedAt(res.updated_at);
       setCloudStatus('synced');
       showToast('ส่งข้อมูลขึ้น Supabase Cloud เรียบร้อยแล้ว');
@@ -644,6 +757,47 @@ export const App: React.FC = () => {
       setCloudStatus('error');
       showToast(res.error || 'ส่งข้อมูลไม่สำเร็จ', 'error');
     }
+  };
+
+  // Admin broadcasts their current Theme + Background + Card Style + Orientation to all other devices!
+  const handlePushDisplayPresetToAll = async (): Promise<{ ok: boolean; error?: string }> => {
+    if (!access.isAdmin) {
+      return { ok: false, error: 'เฉพาะแอดมินเท่านั้นที่ส่งรูปแบบหน้าจอให้ทุกคนได้' };
+    }
+    const preset: SharedDisplayPreset = {
+      themeSettings,
+      cardStyle,
+      orientation,
+      pushedAt: new Date().toISOString(),
+    };
+    try {
+      localStorage.setItem(APPLIED_PRESET_KEY, preset.pushedAt);
+    } catch {
+      // ignore
+    }
+
+    if (!isSupabaseConfigured) {
+      showToast('บันทึกรูปแบบการแสดงผลไว้แล้ว (จะส่งให้ทุกเครื่องเมื่อเชื่อม Supabase)');
+      return { ok: true };
+    }
+
+    const res = await saveCloudFamilyTree({
+      treeData: data,
+      themeSettings: preset,
+      adminPin: sessionPins.adminPin,
+      editorName: 'admin_display_preset',
+    });
+    if (!res.ok) {
+      return { ok: false, error: res.error || 'ไม่สามารถส่งรูปแบบการแสดงผลได้' };
+    }
+    const ts = res.updated_at ? Date.parse(res.updated_at) : Date.now();
+    if (!Number.isNaN(ts)) {
+      lastSavedStampRef.current = ts;
+      lastKnownRemoteStampRef.current = Math.max(lastKnownRemoteStampRef.current, ts);
+    }
+    setLastSyncedAt(res.updated_at);
+    showToast('ส่งรูปแบบการแสดงผลปัจจุบันให้ทุกคนดูตามแล้ว');
+    return { ok: true };
   };
 
   const fullLayoutForMeta = useMemo(() => computeFamilyTreeLayout(data), [data]);
@@ -700,13 +854,14 @@ export const App: React.FC = () => {
   );
 
   const handleSavePerson = (updated: Person) => {
-    commitChange(upsertPerson(data, updated));
-    showToast(`บันทึกข้อมูล ${updated.firstName} แล้ว`);
+    const label = updated.nickname ? `${updated.firstName} (${updated.nickname})` : updated.firstName;
+    commitChange(upsertPerson(data, updated), `ข้อมูลของ ${label} ได้รับการแก้ไข`);
+    showToast(`บันทึกข้อมูล ${label} แล้ว`);
   };
 
   const handleDeletePerson = (personId: string) => {
     const name = data.members[personId]?.firstName || 'สมาชิก';
-    commitChange(deletePerson(data, personId));
+    commitChange(deletePerson(data, personId), `ลบข้อมูล ${name} ออกจากผัง`);
     setSelectedPersonId(null);
     if (focusRootId === personId) setFocusRootId(null);
     if (lineageAnchorId === personId) setLineageAnchorId(null);
@@ -730,6 +885,7 @@ export const App: React.FC = () => {
     otherParentId?: string;
   }) => {
     if (!quickAddState || !access.canEdit) return;
+    const displayLabel = fields.nickname ? `${fields.firstName} (${fields.nickname})` : fields.firstName;
     if (quickAddState.relation === 'standalone' || !quickAddState.anchorId) {
       const newMember = createBlankPerson({
         firstName: fields.firstName,
@@ -745,10 +901,10 @@ export const App: React.FC = () => {
         branch: fields.branch,
         notes: fields.notes,
       });
-      commitChange(upsertPerson(data, newMember));
+      commitChange(upsertPerson(data, newMember), `เพิ่มสมาชิกใหม่: ${displayLabel}`);
       setQuickAddState(null);
       setSelectedPersonId(newMember.id);
-      showToast(`เพิ่ม ${newMember.firstName} เรียบร้อยแล้ว`);
+      showToast(`เพิ่ม ${displayLabel} เรียบร้อยแล้ว`);
       setTimeout(() => treeCanvasRef.current?.focusPerson(newMember.id), 100);
       return;
     }
@@ -758,7 +914,7 @@ export const App: React.FC = () => {
       showToast(res.error, 'error');
       return;
     }
-    commitChange(res.data);
+    commitChange(res.data, `เพิ่มสมาชิกใหม่: ${displayLabel}`);
     setQuickAddState(null);
     if (quickAddState.relation === 'child') {
       setCollapsedIds((prev) => {
@@ -768,13 +924,15 @@ export const App: React.FC = () => {
       });
     }
     setSelectedPersonId(res.newPersonId);
-    showToast(`เพิ่ม ${fields.firstName} เข้าสู่ผังตระกูลแล้ว`);
+    showToast(`เพิ่ม ${displayLabel} เข้าสู่ผังตระกูลแล้ว`);
     setTimeout(() => treeCanvasRef.current?.focusPerson(res.newPersonId), 120);
   };
 
   const handleLinkExisting = (existingPersonId: string, spouseStatus: SpouseStatus = 'married') => {
     if (!quickAddState || !quickAddState.anchorId || !access.canEdit) return;
     const anchorId = quickAddState.anchorId;
+    const anchorName = data.members[anchorId]?.firstName || '';
+    const existingName = data.members[existingPersonId]?.firstName || '';
     let res: { data: FamilyTreeData; error?: string } = { data };
 
     if (quickAddState.relation === 'child') {
@@ -789,7 +947,7 @@ export const App: React.FC = () => {
       showToast(res.error, 'error');
       return;
     }
-    commitChange(res.data);
+    commitChange(res.data, `เชื่อมโยงสายสัมพันธ์: ${anchorName} กับ ${existingName}`);
     setQuickAddState(null);
     showToast('เชื่อมโยงสายสัมพันธ์เรียบร้อยแล้ว');
   };
@@ -843,6 +1001,32 @@ export const App: React.FC = () => {
 
   const memberCount = Object.keys(data.members).length;
 
+  const currentDisplaySummary = useMemo(() => {
+    const styleLabel =
+      cardStyle === 'photo-only'
+        ? 'รูป+ชื่อ'
+        : cardStyle === 'compact'
+          ? 'กะทัดรัด'
+          : 'ละเอียด';
+    const orientLabel =
+      orientation === 'left-right'
+        ? 'แนวตั้ง'
+        : orientation === 'bottom-up'
+          ? 'ล่าง→บน'
+          : 'บน→ล่าง';
+    const bgLabel =
+      themeSettings.bgType === 'tree'
+        ? 'พื้นหลังต้นไม้'
+        : themeSettings.bgType === 'house'
+          ? 'พื้นหลังบ้าน'
+          : themeSettings.bgType === 'botanical'
+            ? 'สีน้ำพฤกษา'
+            : themeSettings.bgType === 'custom'
+              ? 'รูปพื้นหลังเอง'
+              : 'ลายจุด';
+    return `ธีม${palette.name} · ${bgLabel} · การ์ด${styleLabel} · ${orientLabel}`;
+  }, [palette.name, themeSettings.bgType, cardStyle, orientation]);
+
   return (
     <div className="h-screen w-screen flex flex-col overflow-hidden theme-app-bg">
       {/* Top Navigation Bar */}
@@ -850,9 +1034,15 @@ export const App: React.FC = () => {
         {/* Left: Brand & Clan Name */}
         <div className="flex items-center gap-2.5 min-w-0">
           <button
-            onClick={() => setShowSettings(true)}
+            onClick={() => {
+              if (access.isAdmin) {
+                setShowSettings(true);
+              } else {
+                showToast('หน้าตั้งค่าตระกูลสงวนสิทธิ์เฉพาะแอดมินเท่านั้น (กดปุ่มแอดมินเพื่อเข้าสู่ระบบ)', 'error');
+              }
+            }}
             className="flex items-center gap-2.5 group text-left min-w-0 cursor-pointer"
-            title="คลิกเพื่อแก้ไขชื่อตระกูลหรือสำรองข้อมูล"
+            title={access.isAdmin ? 'คลิกเพื่อตั้งค่าตระกูลและสำรองข้อมูล' : data.clanName}
           >
             <div
               style={{ backgroundColor: palette.primary }}
@@ -871,11 +1061,17 @@ export const App: React.FC = () => {
                 <span>·</span>
                 {isSupabaseConfigured ? (
                   <span className="inline-flex items-center gap-1" style={{ color: palette.primary }}>
-                    <Cloud className="w-3 h-3" />
+                    {realtimeConnected && cloudStatus === 'synced' ? (
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                    ) : (
+                      <Cloud className="w-3 h-3" />
+                    )}
                     {cloudStatus === 'saving'
                       ? 'กำลังซิงก์...'
                       : cloudStatus === 'synced'
-                        ? 'Cloud ซิงก์แล้ว'
+                        ? realtimeConnected
+                          ? 'ซิงก์เรียลไทม์'
+                          : 'Cloud ซิงก์แล้ว'
                         : 'กำลังเชื่อมต่อ'}
                   </span>
                 ) : (
@@ -1062,13 +1258,15 @@ export const App: React.FC = () => {
             </button>
           )}
 
-          <button
-            onClick={() => setShowSettings(true)}
-            title="ตั้งค่าตระกูล / สำรองไฟล์ / ส่งออกภาพ"
-            className="p-2 rounded-xl border theme-surface hover:opacity-85 transition-opacity cursor-pointer"
-          >
-            <Settings className="w-4 h-4" />
-          </button>
+          {access.isAdmin && (
+            <button
+              onClick={() => setShowSettings(true)}
+              title="ตั้งค่าตระกูล / สำรองไฟล์ / ส่งออกภาพ (เฉพาะแอดมิน)"
+              className="p-2 rounded-xl border theme-surface hover:opacity-85 transition-opacity cursor-pointer"
+            >
+              <Settings className="w-4 h-4" />
+            </button>
+          )}
         </div>
       </header>
 
@@ -1233,20 +1431,29 @@ export const App: React.FC = () => {
               setCoupleModalState({ personAId, personBId })
             }
             onReorderChildren={(orderedChildIds) => {
-              commitChange(reorderChildren(data, orderedChildIds));
+              commitChange(reorderChildren(data, orderedChildIds), 'ปรับลำดับพี่น้องในครอบครัวแล้ว');
               showToast('ปรับลำดับพี่น้องเรียบร้อยแล้ว');
             }}
             onQuickAdd={(anchorId, relation) => setQuickAddState({ anchorId, relation })}
             onUnlinkParent={(parentId, childId) => {
-              commitChange(unlinkParentChild(data, parentId, childId));
+              const childName = data.members[childId]?.firstName || '';
+              commitChange(
+                unlinkParentChild(data, parentId, childId),
+                `แก้ไขสายสัมพันธ์ของ ${childName}`
+              );
               showToast('ยกเลิกการเชื่อมโยงพ่อ/แม่แล้ว');
             }}
             onUnlinkSpouse={(aId, bId) => {
-              commitChange(unlinkSpouses(data, aId, bId));
+              const nameA = data.members[aId]?.firstName || '';
+              commitChange(unlinkSpouses(data, aId, bId), `แก้ไขคู่สมรสของ ${nameA}`);
               showToast('ยกเลิกการเชื่อมโยงคู่สมรสแล้ว');
             }}
             onUpdateSpouseStatus={(aId, bId, status, marriageDate) => {
-              commitChange(updateSpouseStatus(data, aId, bId, status, marriageDate));
+              const nameA = data.members[aId]?.firstName || '';
+              commitChange(
+                updateSpouseStatus(data, aId, bId, status, marriageDate),
+                `อัปเดตสถานะคู่สมรสของ ${nameA}`
+              );
               showToast('อัปเดตสถานะคู่สมรสแล้ว');
             }}
             onToggleLineageHighlight={(id) => {
@@ -1273,11 +1480,17 @@ export const App: React.FC = () => {
           canEdit={access.canEdit}
           onClose={() => setCoupleModalState(null)}
           onSaveDetails={(aId, bId, details) => {
-            commitChange(updateSpouseDetails(data, aId, bId, details));
+            const label =
+              details.familyName?.trim() ||
+              `${data.members[aId]?.firstName || ''} & ${data.members[bId]?.firstName || ''}`;
+            commitChange(
+              updateSpouseDetails(data, aId, bId, details),
+              `ข้อมูลครอบครัว ${label} ได้รับการแก้ไข`
+            );
             showToast('บันทึกรายละเอียดคู่ครอบครัวเรียบร้อยแล้ว');
           }}
           onReorderChildren={(orderedChildIds) => {
-            commitChange(reorderChildren(data, orderedChildIds));
+            commitChange(reorderChildren(data, orderedChildIds), 'ปรับลำดับพี่น้องในครอบครัวแล้ว');
             showToast('ปรับลำดับพี่น้องเรียบร้อยแล้ว');
           }}
           onSelectPerson={(id) => {
@@ -1309,11 +1522,13 @@ export const App: React.FC = () => {
           cloudStatus={cloudStatus}
           lastSyncedAt={lastSyncedAt}
           palette={palette}
+          currentDisplaySummary={currentDisplaySummary}
           onClose={() => setShowAdminModal(false)}
           onLoginAdmin={handleLoginAdmin}
           onLogoutAdmin={handleLogoutAdmin}
           onUnlockEditPin={handleUnlockEditPin}
           onSaveAccessRules={handleSaveAccessRules}
+          onPushDisplayPresetToAll={handlePushDisplayPresetToAll}
           onManualSyncPull={async () => {
             const res = await pullFromCloud(undefined, false);
             if (res?.ok) showToast('ดึงข้อมูลล่าสุดจาก Cloud เรียบร้อยแล้ว');
@@ -1332,8 +1547,8 @@ export const App: React.FC = () => {
         />
       )}
 
-      {/* Clan Settings / Backup / Export Modal */}
-      {showSettings && (
+      {/* Clan Settings / Backup / Export Modal (STRICTLY ADMIN ONLY!) */}
+      {showSettings && access.isAdmin && (
         <ClanSettingsModal
           data={data}
           isAdmin={access.isAdmin}

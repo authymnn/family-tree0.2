@@ -36,7 +36,11 @@ import {
 import { ThemePalette } from '../utils/themes';
 import { computeFamilyTreeLayout, PositionedCard } from '../utils/treeLayout';
 import { calculateAge, formatYearSpan } from '../utils/dateUtils';
-import { getSiblingRankInfo } from '../utils/familyOps';
+import {
+  getCoupleColor,
+  getSiblingRankInfo,
+  getUnitFamilyColor,
+} from '../utils/familyOps';
 import { PersonAvatar } from './PersonAvatar';
 import { CanvasBackground } from './CanvasBackground';
 
@@ -697,7 +701,7 @@ export const TreeCanvas = React.forwardRef<TreeCanvasHandle, TreeCanvasProps>(
           </div>
         )}
 
-        {/* Interactive Pan/Zoom Surface */}
+        {/* Interactive Pan/Zoom Surface (supports mouse wheel + 1-finger pan + 2-finger mobile pinch-to-zoom!) */}
         <div
           ref={containerRef}
           onWheel={handleWheel}
@@ -705,7 +709,8 @@ export const TreeCanvas = React.forwardRef<TreeCanvasHandle, TreeCanvasProps>(
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
           onPointerCancel={handlePointerUp}
-          className={`relative z-10 w-full h-full ${isPanning ? 'cursor-grabbing' : 'cursor-grab'}`}
+          style={{ touchAction: 'none' }}
+          className={`relative z-10 w-full h-full touch-none ${isInteracting ? 'cursor-grabbing' : 'cursor-grab'}`}
         >
           <div
             style={{
@@ -713,11 +718,11 @@ export const TreeCanvas = React.forwardRef<TreeCanvasHandle, TreeCanvasProps>(
               height: layout.height,
               transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
               transformOrigin: '0 0',
-              transition: isPanning ? 'none' : 'transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1)',
+              transition: isInteracting ? 'none' : 'transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1)',
             }}
             className="relative"
           >
-            {/* SVG Layer for Parent-Child & Marriage Connectors */}
+            {/* SVG Layer for Crisp, High-Clarity Family-Colored Parent-Child & Marriage Connectors */}
             <svg
               width={layout.width}
               height={layout.height}
@@ -729,17 +734,28 @@ export const TreeCanvas = React.forwardRef<TreeCanvasHandle, TreeCanvasProps>(
                   highlightIds.has(conn.childId) &&
                   conn.parentIds.some((pid) => highlightIds.has(pid));
                 const isMuted = highlightIds && highlightIds.size > 0 && !isHighlighted;
+                const familyColor = getUnitFamilyColor(data.members, conn.parentIds);
                 return (
-                  <path
-                    key={conn.id}
-                    d={conn.path}
-                    fill="none"
-                    stroke={isHighlighted ? palette.accent : palette.connectorLine}
-                    strokeWidth={isHighlighted ? 3 : 2}
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    opacity={isMuted ? 0.22 : 1}
-                  />
+                  <g key={conn.id} opacity={isMuted ? 0.18 : 1}>
+                    {/* Soft background halo so lines pop crisply over any photo/tree background */}
+                    <path
+                      d={conn.path}
+                      fill="none"
+                      stroke={palette.bgSurface}
+                      strokeWidth={isHighlighted ? 7.5 : 5.5}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      opacity={0.7}
+                    />
+                    <path
+                      d={conn.path}
+                      fill="none"
+                      stroke={isHighlighted ? palette.accent : familyColor}
+                      strokeWidth={isHighlighted ? 4.2 : 3}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </g>
                 );
               })}
 
@@ -751,25 +767,45 @@ export const TreeCanvas = React.forwardRef<TreeCanvasHandle, TreeCanvasProps>(
                 const isMuted = highlightIds && highlightIds.size > 0 && !isHighlighted;
                 const midX = (mar.x1 + mar.x2) / 2;
                 const midY = (mar.y1 + mar.y2) / 2;
+                const spLink = data.members[mar.personAId]?.spouses.find(
+                  (s) => s.spouseId === mar.personBId
+                );
+                const partnerSpLink = data.members[mar.personBId]?.spouses.find(
+                  (s) => s.spouseId === mar.personAId
+                );
+                const coupleColor = getCoupleColor(
+                  mar.personAId,
+                  mar.personBId,
+                  spLink?.color || partnerSpLink?.color
+                );
 
                 return (
-                  <g key={mar.id} opacity={isMuted ? 0.25 : 1}>
+                  <g key={mar.id} opacity={isMuted ? 0.2 : 1}>
                     <line
                       x1={mar.x1}
                       y1={mar.y1}
                       x2={mar.x2}
                       y2={mar.y2}
-                      stroke={mar.status === 'divorced' ? '#C58E83' : palette.accent}
-                      strokeWidth={isHighlighted ? 3 : 2}
-                      strokeDasharray={mar.status === 'divorced' ? '4 4' : undefined}
+                      stroke={palette.bgSurface}
+                      strokeWidth={6}
+                      opacity={0.75}
+                    />
+                    <line
+                      x1={mar.x1}
+                      y1={mar.y1}
+                      x2={mar.x2}
+                      y2={mar.y2}
+                      stroke={mar.status === 'divorced' ? '#C58E83' : coupleColor}
+                      strokeWidth={isHighlighted ? 4.2 : 3.2}
+                      strokeDasharray={mar.status === 'divorced' ? '5 4' : undefined}
                     />
                     <circle
                       cx={midX}
                       cy={midY}
-                      r={7}
+                      r={8}
                       fill={palette.bgSurface}
-                      stroke={mar.status === 'divorced' ? '#C58E83' : palette.accent}
-                      strokeWidth={1.25}
+                      stroke={mar.status === 'divorced' ? '#C58E83' : coupleColor}
+                      strokeWidth={2}
                     />
                   </g>
                 );
@@ -787,13 +823,21 @@ export const TreeCanvas = React.forwardRef<TreeCanvasHandle, TreeCanvasProps>(
               const spLink = data.members[mar.personAId]?.spouses.find(
                 (s) => s.spouseId === mar.personBId
               );
+              const partnerSpLink = data.members[mar.personBId]?.spouses.find(
+                (s) => s.spouseId === mar.personAId
+              );
+              const coupleColor = getCoupleColor(
+                mar.personAId,
+                mar.personBId,
+                spLink?.color || partnerSpLink?.color
+              );
               return (
                 <div
                   key={`heart_${mar.id}`}
                   data-card-interactive="true"
                   style={{
-                    left: midX - 11,
-                    top: midY - 11,
+                    left: midX - 12,
+                    top: midY - 12,
                     opacity: isMuted ? 0.25 : 1,
                   }}
                   className="absolute z-10 flex flex-col items-center"
@@ -802,19 +846,20 @@ export const TreeCanvas = React.forwardRef<TreeCanvasHandle, TreeCanvasProps>(
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
+                      if (didDragRef.current) return;
                       onOpenCoupleDetail?.(mar.personAId, mar.personBId);
                     }}
                     title={
                       spLink?.familyName
-                        ? `${spLink.familyName} — คลิกดู/ตั้งค่ารายละเอียดคู่ครอบครัว`
-                        : 'คลิกดู/ตั้งค่ารายละเอียดคู่ครอบครัว'
+                        ? `${spLink.familyName} — คลิกดู/ตั้งค่ารายละเอียดและสีครอบครัว`
+                        : 'คลิกดู/ตั้งค่ารายละเอียดและสีครอบครัว'
                     }
                     style={{
                       backgroundColor: palette.bgSurface,
-                      borderColor: mar.status === 'divorced' ? '#C58E83' : palette.accent,
-                      color: mar.status === 'divorced' ? '#C58E83' : palette.accent,
+                      borderColor: mar.status === 'divorced' ? '#C58E83' : coupleColor,
+                      color: mar.status === 'divorced' ? '#C58E83' : coupleColor,
                     }}
-                    className="w-[22px] h-[22px] rounded-full border shadow-xs flex items-center justify-center hover:scale-125 transition-transform cursor-pointer"
+                    className="w-[24px] h-[24px] rounded-full border-2 shadow-sm flex items-center justify-center hover:scale-125 transition-transform cursor-pointer"
                   >
                     <Heart
                       className="w-3 h-3"
@@ -824,11 +869,10 @@ export const TreeCanvas = React.forwardRef<TreeCanvasHandle, TreeCanvasProps>(
                   {spLink?.familyName && cardStyle === 'detailed' && orientation !== 'left-right' && (
                     <span
                       style={{
-                        backgroundColor: palette.bgSurface,
-                        borderColor: palette.border,
-                        color: palette.accent,
+                        backgroundColor: coupleColor,
+                        color: '#ffffff',
                       }}
-                      className="mt-1 px-1.5 py-0.5 rounded-full border text-[9px] font-semibold whitespace-nowrap shadow-2xs pointer-events-none"
+                      className="mt-1 px-2 py-0.5 rounded-full text-[9.5px] font-semibold whitespace-nowrap shadow-xs pointer-events-none"
                     >
                       {spLink.familyName}
                     </span>
@@ -894,7 +938,7 @@ export const TreeCanvas = React.forwardRef<TreeCanvasHandle, TreeCanvasProps>(
                   {/* STYLE A: PHOTO + NAME ONLY (Vertical Portrait Tile for Top-Down / Bottom-Up) */}
                   {cardStyle === 'photo-only' && orientation !== 'left-right' ? (
                     <div
-                      onClick={() => onSelectPerson(person.id)}
+                      onClick={() => handleSafeCardClick(person.id)}
                       style={cardStyleProps}
                       className={`relative w-full h-full rounded-2xl border p-2 flex flex-col items-center justify-center gap-1.5 text-center transition-all cursor-pointer ${
                         isSelected ? '-translate-y-0.5' : 'hover:-translate-y-0.5'
@@ -932,7 +976,7 @@ export const TreeCanvas = React.forwardRef<TreeCanvasHandle, TreeCanvasProps>(
                   ) : cardStyle === 'photo-only' && orientation === 'left-right' ? (
                     /* STYLE B: PHOTO + NAME ONLY (Sleek Horizontal Pill for Left-Right Vertical Stack!) */
                     <div
-                      onClick={() => onSelectPerson(person.id)}
+                      onClick={() => handleSafeCardClick(person.id)}
                       style={cardStyleProps}
                       className={`relative w-full h-full rounded-2xl overflow-hidden border pl-3 pr-2.5 py-1.5 flex items-center gap-2 transition-all cursor-pointer ${
                         isSelected ? '-translate-y-0.5' : 'hover:-translate-y-0.5'
@@ -972,7 +1016,7 @@ export const TreeCanvas = React.forwardRef<TreeCanvasHandle, TreeCanvasProps>(
                   ) : (
                     /* STYLE C: DETAILED or COMPACT CARD */
                     <div
-                      onClick={() => onSelectPerson(person.id)}
+                      onClick={() => handleSafeCardClick(person.id)}
                       style={cardStyleProps}
                       className={`relative w-full h-full rounded-2xl overflow-hidden border transition-all cursor-pointer flex items-center gap-2.5 ${
                         cardStyle === 'compact' ? 'pl-3 pr-2.5 py-2' : 'pl-3.5 pr-3 py-2.5'

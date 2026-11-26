@@ -246,7 +246,8 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                 return (
                   <div
                     key={unit.id}
-                    className="p-4 rounded-2xl border border-[#E5DFD5] bg-[#FAF8F4] hover:border-[#2E6254] transition-all flex flex-col justify-between gap-3"
+                    style={{ borderLeftColor: unit.color }}
+                    className="p-4 rounded-2xl border border-[#E5DFD5] border-l-4 bg-[#FAF8F4] hover:border-[#2E6254] transition-all flex flex-col justify-between gap-3"
                   >
                     <div className="space-y-2.5">
                       {/* Header Row */}
@@ -258,6 +259,11 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                           </div>
                           <div className="min-w-0">
                             <div className="flex items-center gap-1.5 flex-wrap">
+                              <span
+                                style={{ backgroundColor: unit.color }}
+                                className="w-2.5 h-2.5 rounded-full shrink-0"
+                                title="สีประจำครอบครัว"
+                              />
                               {gen != null && (
                                 <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-white border border-[#E5DFD5] text-[#53615C]">
                                   รุ่น {gen}
