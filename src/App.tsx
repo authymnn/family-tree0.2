@@ -18,6 +18,7 @@ import {
   ShieldCheck,
   Lock,
   Cloud,
+  Download,
 } from 'lucide-react';
 import {
   CardStyle,
@@ -53,6 +54,7 @@ import {
   upsertPerson,
   validateImportedData,
 } from './utils/familyOps';
+import { mergeFamilyTreeData } from './utils/familyMerge';
 import { computeFamilyTreeLayout } from './utils/treeLayout';
 import { getLineageHighlightSet } from './utils/kinship';
 import { exportTreeAsPng } from './utils/exportImage';
@@ -72,6 +74,8 @@ import {
 } from './lib/supabase';
 import { TreeCanvas, TreeCanvasHandle } from './components/TreeCanvas';
 import { PersonDrawer } from './components/PersonDrawer';
+import { PersonPreviewModal } from './components/PersonPreviewModal';
+import { ExportShareModal } from './components/ExportShareModal';
 import { QuickAddModal } from './components/QuickAddModal';
 import { DirectoryView } from './components/DirectoryView';
 import { KinshipView } from './components/KinshipView';
@@ -215,7 +219,12 @@ export const App: React.FC = () => {
       : computeLocalAccessState(loadLocalAccessConfig(), loadSessionPins(), loadInitialData().clanName)
   );
 
-  // Refs to prevent save loops when applying incoming Realtime updates
+  // Refs to prevent save loops and enable conflict-free 3-way multi-user merging
+  const dataRef = useRef<FamilyTreeData>(data);
+  dataRef.current = data;
+  const lastSyncedBaseDataRef = useRef<FamilyTreeData | null>(null);
+  const hasUnsavedLocalChangesRef = useRef(false);
+  const forceOverwriteCloudRef = useRef(false);
   const suppressNextCloudSaveRef = useRef(false);
   const lastSavedStampRef = useRef<number>(0);
   const lastKnownRemoteStampRef = useRef<number>(0);
@@ -226,11 +235,22 @@ export const App: React.FC = () => {
 
   const [view, setView] = useState<ViewMode>('tree');
   const [simpleMode, setSimpleMode] = useState(false);
-  const [selectedPersonId, setSelectedPersonId] = useState<string | null>(null);
+  const [previewPersonId, setPreviewPersonId] = useState<string | null>(null);
+  const [editingPersonId, setEditingPersonId] = useState<string | null>(null);
   const [cardStyle, setCardStyle] = useState<CardStyle>(() => loadViewPrefs().cardStyle);
   const [orientation, setOrientation] = useState<TreeOrientation>(() => loadViewPrefs().orientation);
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(() => new Set());
   const [focusRootId, setFocusRootId] = useState<string | null>(null);
+
+  const openPersonPreview = useCallback((id: string | null) => {
+    setEditingPersonId(null);
+    setPreviewPersonId(id);
+  }, []);
+
+  const openPersonEditor = useCallback((id: string) => {
+    setPreviewPersonId(null);
+    setEditingPersonId(id);
+  }, []);
 
   // Save cardStyle & orientation strictly per-device (never synced across family devices)
   useEffect(() => {
@@ -254,6 +274,7 @@ export const App: React.FC = () => {
   } | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showThemePicker, setShowThemePicker] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false);
   const [showAdminModal, setShowAdminModal] = useState(false);
   const [coupleModalState, setCoupleModalState] = useState<{
     personAId: string;
@@ -381,8 +402,20 @@ export const App: React.FC = () => {
       if (res.exists && res.tree_data) {
         const valid = validateImportedData(res.tree_data);
         if (valid) {
-          suppressNextCloudSaveRef.current = true;
-          setData(valid);
+          if (hasUnsavedLocalChangesRef.current) {
+            // Merge incoming remote changes with unsaved local edits so neither side is lost
+            const { merged } = mergeFamilyTreeData(
+              lastSyncedBaseDataRef.current,
+              dataRef.current,
+              valid
+            );
+            lastSyncedBaseDataRef.current = valid;
+            setData(merged);
+          } else {
+            lastSyncedBaseDataRef.current = valid;
+            suppressNextCloudSaveRef.current = true;
+            setData(valid);
+          }
         }
         // Only apply theme/layout if Admin explicitly pushed a newer SharedDisplayPreset
         if (res.theme_settings) {
@@ -482,7 +515,7 @@ export const App: React.FC = () => {
     };
   }, [pullFromCloud, notifyRemoteActivity]);
 
-  // Debounced Auto-Save to Supabase Cloud whenever family data changes (theme & view prefs remain per-device!)
+  // Debounced Auto-Save to Supabase Cloud with 3-way conflict-free merge (concurrent multi-user safe!)
   useEffect(() => {
     if (!isSupabaseConfigured) return;
     if (!cloudInitializedRef.current) return;
@@ -498,8 +531,38 @@ export const App: React.FC = () => {
 
     saveTimerRef.current = window.setTimeout(async () => {
       const activityMsg = pendingActivityRef.current || 'อัปเดตข้อมูลผังตระกูล';
+      const localSnapshot = data;
+      let dataToSave = localSnapshot;
+      let mergedWithRemote = false;
+
+      if (!forceOverwriteCloudRef.current) {
+        const latestRemote = await fetchCloudFamilyTree(sessionPins);
+        if (latestRemote.ok && latestRemote.exists && latestRemote.tree_data) {
+          const remoteValid = validateImportedData(latestRemote.tree_data);
+          const remoteTs = latestRemote.updated_at ? Date.parse(latestRemote.updated_at) : 0;
+          const base = lastSyncedBaseDataRef.current;
+          const remoteChanged =
+            Boolean(remoteValid) &&
+            (!base ||
+              remoteValid!.updatedAt !== base.updatedAt ||
+              (!Number.isNaN(remoteTs) && remoteTs > lastKnownRemoteStampRef.current + 50));
+
+          if (remoteValid && remoteChanged) {
+            const { merged, hadRemoteAdditionsOrEdits } = mergeFamilyTreeData(
+              base,
+              localSnapshot,
+              remoteValid
+            );
+            dataToSave = merged;
+            mergedWithRemote = hadRemoteAdditionsOrEdits;
+          }
+        }
+      } else {
+        forceOverwriteCloudRef.current = false;
+      }
+
       const res = await saveCloudFamilyTree({
-        treeData: data,
+        treeData: dataToSave,
         editPin: sessionPins.editPin,
         adminPin: sessionPins.adminPin,
         editorName: activityMsg,
@@ -509,6 +572,15 @@ export const App: React.FC = () => {
         if (!Number.isNaN(ts)) {
           lastSavedStampRef.current = ts;
           lastKnownRemoteStampRef.current = Math.max(lastKnownRemoteStampRef.current, ts);
+        }
+        lastSyncedBaseDataRef.current = dataToSave;
+        if (dataRef.current === localSnapshot) {
+          hasUnsavedLocalChangesRef.current = false;
+          if (mergedWithRemote) {
+            suppressNextCloudSaveRef.current = true;
+            setData(dataToSave);
+            showToast('ผสานข้อมูลที่ญาติแก้พร้อมกันเรียบร้อย (ไม่ทับกัน)');
+          }
         }
         setLastSyncedAt(res.updated_at);
         setCloudStatus('synced');
@@ -527,8 +599,7 @@ export const App: React.FC = () => {
     access.canEdit,
     access.viewLocked,
     access.isAdmin,
-    sessionPins.editPin,
-    sessionPins.adminPin,
+    sessionPins,
     showToast,
     pullFromCloud,
   ]);
@@ -540,6 +611,7 @@ export const App: React.FC = () => {
         return;
       }
       pendingActivityRef.current = activityMessage;
+      hasUnsavedLocalChangesRef.current = true;
       setData((prev) => {
         setPast((p) => [...p.slice(-(MAX_HISTORY - 1)), prev]);
         setFuture([]);
@@ -554,6 +626,8 @@ export const App: React.FC = () => {
     setPast((prevPast) => {
       if (prevPast.length === 0) return prevPast;
       const previous = prevPast[prevPast.length - 1];
+      hasUnsavedLocalChangesRef.current = true;
+      pendingActivityRef.current = 'ย้อนกลับการแก้ไขล่าสุด';
       setFuture((f) => [data, ...f]);
       setData(previous);
       showToast('ย้อนกลับการแก้ไขล่าสุดแล้ว');
@@ -566,6 +640,8 @@ export const App: React.FC = () => {
     setFuture((prevFuture) => {
       if (prevFuture.length === 0) return prevFuture;
       const next = prevFuture[0];
+      hasUnsavedLocalChangesRef.current = true;
+      pendingActivityRef.current = 'ทำซ้ำการแก้ไข';
       setPast((p) => [...p, data]);
       setData(next);
       showToast('ทำซ้ำการแก้ไขแล้ว');
@@ -738,8 +814,22 @@ export const App: React.FC = () => {
   const handleManualSyncPush = async () => {
     if (!isSupabaseConfigured) return;
     setCloudStatus('saving');
+    let dataToSave = data;
+    let mergedWithRemote = false;
+
+    const latestRemote = await fetchCloudFamilyTree(sessionPins);
+    if (latestRemote.ok && latestRemote.exists && latestRemote.tree_data) {
+      const remoteValid = validateImportedData(latestRemote.tree_data);
+      const base = lastSyncedBaseDataRef.current;
+      if (remoteValid && (!base || remoteValid.updatedAt !== base.updatedAt)) {
+        const { merged, hadRemoteAdditionsOrEdits } = mergeFamilyTreeData(base, data, remoteValid);
+        dataToSave = merged;
+        mergedWithRemote = hadRemoteAdditionsOrEdits;
+      }
+    }
+
     const res = await saveCloudFamilyTree({
-      treeData: data,
+      treeData: dataToSave,
       editPin: sessionPins.editPin,
       adminPin: sessionPins.adminPin,
       editorName: access.isAdmin ? 'แอดมินซิงก์ข้อมูลผังตระกูล' : 'อัปเดตข้อมูลผังตระกูล',
@@ -750,9 +840,19 @@ export const App: React.FC = () => {
         lastSavedStampRef.current = ts;
         lastKnownRemoteStampRef.current = Math.max(lastKnownRemoteStampRef.current, ts);
       }
+      lastSyncedBaseDataRef.current = dataToSave;
+      hasUnsavedLocalChangesRef.current = false;
+      if (mergedWithRemote) {
+        suppressNextCloudSaveRef.current = true;
+        setData(dataToSave);
+      }
       setLastSyncedAt(res.updated_at);
       setCloudStatus('synced');
-      showToast('ส่งข้อมูลขึ้น Supabase Cloud เรียบร้อยแล้ว');
+      showToast(
+        mergedWithRemote
+          ? 'ผสานข้อมูลที่ญาติแก้พร้อมกัน และส่งขึ้น Cloud เรียบร้อยแล้ว'
+          : 'ส่งข้อมูลขึ้น Supabase Cloud เรียบร้อยแล้ว'
+      );
     } else {
       setCloudStatus('error');
       showToast(res.error || 'ส่งข้อมูลไม่สำเร็จ', 'error');
@@ -822,7 +922,9 @@ export const App: React.FC = () => {
     return null;
   }, [customHighlight, lineageAnchorId, data.members]);
 
-  const selectedPerson = selectedPersonId ? data.members[selectedPersonId] ?? null : null;
+  const previewPerson = previewPersonId ? data.members[previewPersonId] ?? null : null;
+  const editingPerson = editingPersonId ? data.members[editingPersonId] ?? null : null;
+  const activeSelectedPersonId = editingPersonId ?? previewPersonId;
 
   const searchResults = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -844,13 +946,13 @@ export const App: React.FC = () => {
     (personId: string) => {
       if (!data.members[personId]) return;
       setView('tree');
-      setSelectedPersonId(personId);
+      openPersonPreview(personId);
       setCollapsedIds(new Set());
       setTimeout(() => {
         treeCanvasRef.current?.focusPerson(personId);
       }, 80);
     },
-    [data.members]
+    [data.members, openPersonPreview]
   );
 
   const handleSavePerson = (updated: Person) => {
@@ -862,7 +964,8 @@ export const App: React.FC = () => {
   const handleDeletePerson = (personId: string) => {
     const name = data.members[personId]?.firstName || 'สมาชิก';
     commitChange(deletePerson(data, personId), `ลบข้อมูล ${name} ออกจากผัง`);
-    setSelectedPersonId(null);
+    setPreviewPersonId(null);
+    setEditingPersonId(null);
     if (focusRootId === personId) setFocusRootId(null);
     if (lineageAnchorId === personId) setLineageAnchorId(null);
     showToast(`ลบข้อมูล ${name} ออกจากผังแล้ว`);
@@ -903,7 +1006,7 @@ export const App: React.FC = () => {
       });
       commitChange(upsertPerson(data, newMember), `เพิ่มสมาชิกใหม่: ${displayLabel}`);
       setQuickAddState(null);
-      setSelectedPersonId(newMember.id);
+      openPersonPreview(newMember.id);
       showToast(`เพิ่ม ${displayLabel} เรียบร้อยแล้ว`);
       setTimeout(() => treeCanvasRef.current?.focusPerson(newMember.id), 100);
       return;
@@ -923,7 +1026,7 @@ export const App: React.FC = () => {
         return next;
       });
     }
-    setSelectedPersonId(res.newPersonId);
+    openPersonPreview(res.newPersonId);
     showToast(`เพิ่ม ${displayLabel} เข้าสู่ผังตระกูลแล้ว`);
     setTimeout(() => treeCanvasRef.current?.focusPerson(res.newPersonId), 120);
   };
@@ -1226,6 +1329,20 @@ export const App: React.FC = () => {
             <span className="hidden xl:inline">ธีม/พื้นหลัง</span>
           </button>
 
+          {/* Public Export / Download PNG / Sheet / Backup button (Everyone can use!) */}
+          <button
+            onClick={() => setShowExportModal(true)}
+            style={{
+              backgroundColor: palette.bgSubtle,
+              borderColor: palette.border,
+            }}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-xs font-medium hover:opacity-85 transition-opacity cursor-pointer"
+            title="ดาวน์โหลดภาพผังตระกูล / คัดลอกหรือส่งออกเป็น Sheet / สำรองข้อมูล (ทุกคนใช้ได้)"
+          >
+            <Download className="w-3.5 h-3.5" style={{ color: palette.primary }} />
+            <span className="hidden xl:inline">ส่งออก/ชีต</span>
+          </button>
+
           {/* Undo / Redo (only when canEdit) */}
           {access.canEdit && (
             <div className="hidden sm:flex items-center border rounded-xl theme-subtle p-0.5">
@@ -1324,7 +1441,7 @@ export const App: React.FC = () => {
           <TreeCanvas
             ref={treeCanvasRef}
             data={data}
-            selectedPersonId={selectedPersonId}
+            selectedPersonId={activeSelectedPersonId}
             highlightIds={activeHighlight?.ids ?? null}
             highlightLabel={activeHighlight?.label ?? null}
             onClearHighlight={() => {
@@ -1344,7 +1461,7 @@ export const App: React.FC = () => {
               setTimeout(() => treeCanvasRef.current?.fitToScreen(), 80);
             }}
             onCollapseToLevel2={handleCollapseToLevel2}
-            onSelectPerson={(id) => setSelectedPersonId(id)}
+            onSelectPerson={(id) => openPersonPreview(id)}
             onOpenCoupleDetail={(personAId, personBId) =>
               setCoupleModalState({ personAId, personBId })
             }
@@ -1375,7 +1492,7 @@ export const App: React.FC = () => {
             generationMap={fullLayoutForMeta.generationMap}
             branches={branches}
             canEdit={access.canEdit}
-            onSelectAndInspect={(id) => setSelectedPersonId(id)}
+            onSelectAndInspect={(id) => openPersonPreview(id)}
             onJumpToTree={jumpToPersonOnTree}
             onAddStandalone={() => setQuickAddState({ anchorId: null, relation: 'standalone' })}
           />
@@ -1402,27 +1519,28 @@ export const App: React.FC = () => {
             data={data}
             generationMap={fullLayoutForMeta.generationMap}
             canEdit={access.canEdit}
-            onSelectPerson={(id) => setSelectedPersonId(id)}
+            onSelectPerson={(id) => openPersonPreview(id)}
             onOpenCoupleDetail={(personAId, personBId) =>
               setCoupleModalState({ personAId, personBId })
             }
           />
         )}
 
-        {/* Right Slide-Over Person Inspector / Editor Drawer */}
-        {selectedPerson && (
+        {/* Right Slide-Over Person Editor Drawer (opened when clicking "แก้ไขข้อมูล" in Preview Popup) */}
+        {editingPerson && (
           <PersonDrawer
             data={data}
-            person={selectedPerson}
-            generation={fullLayoutForMeta.generationMap[selectedPerson.id]}
+            person={editingPerson}
+            generation={fullLayoutForMeta.generationMap[editingPerson.id]}
             existingBranches={branches}
-            isLineageHighlighted={lineageAnchorId === selectedPerson.id}
+            isLineageHighlighted={lineageAnchorId === editingPerson.id}
             canEdit={access.canEdit}
-            onClose={() => setSelectedPersonId(null)}
+            initialEditMode={true}
+            onClose={() => setEditingPersonId(null)}
             onSavePerson={handleSavePerson}
             onDeletePerson={handleDeletePerson}
             onSelectPerson={(id) => {
-              setSelectedPersonId(id);
+              openPersonPreview(id);
               if (view === 'tree') {
                 treeCanvasRef.current?.focusPerson(id);
               }
@@ -1470,6 +1588,46 @@ export const App: React.FC = () => {
         )}
       </main>
 
+      {/* Compact Person Detail Preview Popup (opens first when clicking any member) */}
+      {previewPerson && (
+        <PersonPreviewModal
+          data={data}
+          person={previewPerson}
+          generation={fullLayoutForMeta.generationMap[previewPerson.id]}
+          palette={palette}
+          canEdit={access.canEdit}
+          isLineageHighlighted={lineageAnchorId === previewPerson.id}
+          onClose={() => setPreviewPersonId(null)}
+          onOpenFullEditor={(id) => openPersonEditor(id)}
+          onSelectPerson={(id) => {
+            openPersonPreview(id);
+            if (view === 'tree') {
+              treeCanvasRef.current?.focusPerson(id);
+            }
+          }}
+          onOpenCoupleDetail={(personAId, personBId) => {
+            setPreviewPersonId(null);
+            setCoupleModalState({ personAId, personBId });
+          }}
+          onQuickAdd={(anchorId, relation) => {
+            setPreviewPersonId(null);
+            setQuickAddState({ anchorId, relation });
+          }}
+          onToggleLineageHighlight={(id) => {
+            setCustomHighlight(null);
+            setLineageAnchorId((prev) => (prev === id ? null : id));
+            setPreviewPersonId(null);
+            if (view !== 'tree') setView('tree');
+          }}
+          onFocusSubtree={(id) => {
+            setFocusRootId(id);
+            setCollapsedIds(new Set());
+            setPreviewPersonId(null);
+            setView('tree');
+          }}
+        />
+      )}
+
       {/* Couple / Household Detail Settings Modal */}
       {coupleModalState && (
         <CoupleDetailModal
@@ -1494,11 +1652,25 @@ export const App: React.FC = () => {
             showToast('ปรับลำดับพี่น้องเรียบร้อยแล้ว');
           }}
           onSelectPerson={(id) => {
-            setSelectedPersonId(id);
+            setCoupleModalState(null);
+            openPersonPreview(id);
             if (view === 'tree') {
               treeCanvasRef.current?.focusPerson(id);
             }
           }}
+        />
+      )}
+
+      {/* Public Export / Download Image / Google Sheets & Excel Modal (Accessible to everyone!) */}
+      {showExportModal && (
+        <ExportShareModal
+          data={data}
+          generationMap={fullLayoutForMeta.generationMap}
+          palette={palette}
+          onClose={() => setShowExportModal(false)}
+          onExportPng={() =>
+            exportTreeAsPng(data, { cardStyle, orientation, collapsedIds, focusRootId, palette })
+          }
         />
       )}
 
@@ -1571,8 +1743,10 @@ export const App: React.FC = () => {
               showToast('เฉพาะแอดมินเท่านั้นที่นำเข้าไฟล์ได้', 'error');
               return;
             }
-            commitChange(imported);
-            setSelectedPersonId(null);
+            forceOverwriteCloudRef.current = true;
+            commitChange(imported, `แอดมินนำเข้าข้อมูลตระกูล ${imported.clanName}`);
+            setPreviewPersonId(null);
+            setEditingPersonId(null);
             setFocusRootId(null);
             setCollapsedIds(new Set());
             setLineageAnchorId(null);
@@ -1588,8 +1762,10 @@ export const App: React.FC = () => {
               showToast('เฉพาะแอดมินเท่านั้นที่รีเซ็ตข้อมูลได้', 'error');
               return;
             }
-            commitChange(createSampleFamilyTree());
-            setSelectedPersonId(null);
+            forceOverwriteCloudRef.current = true;
+            commitChange(createSampleFamilyTree(), 'แอดมินโหลดข้อมูลตัวอย่างใหม่');
+            setPreviewPersonId(null);
+            setEditingPersonId(null);
             setFocusRootId(null);
             setCollapsedIds(new Set());
             setLineageAnchorId(null);
@@ -1603,8 +1779,9 @@ export const App: React.FC = () => {
               return;
             }
             const fresh = createEmptyFamilyTree(newClanName);
-            commitChange(fresh);
-            setSelectedPersonId(fresh.rootPersonId ?? null);
+            forceOverwriteCloudRef.current = true;
+            commitChange(fresh, `แอดมินสร้างผังตระกูลใหม่ ${newClanName}`);
+            openPersonPreview(fresh.rootPersonId ?? null);
             setFocusRootId(null);
             setCollapsedIds(new Set());
             setLineageAnchorId(null);

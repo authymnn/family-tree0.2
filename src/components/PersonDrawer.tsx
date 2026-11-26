@@ -48,6 +48,7 @@ interface PersonDrawerProps {
   existingBranches: string[];
   isLineageHighlighted: boolean;
   canEdit?: boolean;
+  initialEditMode?: boolean;
   onClose: () => void;
   onSavePerson: (updated: Person) => void;
   onDeletePerson: (personId: string) => void;
@@ -81,6 +82,7 @@ export const PersonDrawer: React.FC<PersonDrawerProps> = ({
   existingBranches,
   isLineageHighlighted,
   canEdit = true,
+  initialEditMode = false,
   onClose,
   onSavePerson,
   onDeletePerson,
@@ -94,7 +96,7 @@ export const PersonDrawer: React.FC<PersonDrawerProps> = ({
   onToggleLineageHighlight,
   onFocusSubtree,
 }) => {
-  const [isEditing, setIsEditing] = useState(false);
+  const [isEditing, setIsEditing] = useState(Boolean(initialEditMode && canEdit));
   const [draft, setDraft] = useState<Person>(person);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [uploadError, setUploadError] = useState('');
@@ -106,14 +108,26 @@ export const PersonDrawer: React.FC<PersonDrawerProps> = ({
   const quickAvatarInputRef = useRef<HTMLInputElement>(null);
   const galleryInputRef = useRef<HTMLInputElement>(null);
 
+  // Reset edit mode when switching to a different person or toggling edit permission
   useEffect(() => {
     setDraft(person);
     setQuickNoteText(person.notes || '');
     setQuickNoteMode(false);
-    setIsEditing(false);
+    setIsEditing(Boolean(initialEditMode && canEdit));
     setConfirmDelete(false);
     setUploadError('');
-  }, [person.id, person.updatedAt, canEdit]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [person.id, initialEditMode, canEdit]);
+
+  // Keep draft synchronized when person's data updates (e.g. photo upload, remote merge, or save)
+  useEffect(() => {
+    setDraft(person);
+    setQuickNoteText(person.notes || '');
+    setQuickNoteMode(false);
+    setConfirmDelete(false);
+    setUploadError('');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [person.updatedAt]);
 
   const parents = person.parentIds.map((id) => data.members[id]).filter(Boolean);
   const children = getChildrenOf(data.members, person.id);
