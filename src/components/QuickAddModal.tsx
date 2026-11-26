@@ -6,9 +6,9 @@ import {
   getDisplayNameWithNickname,
   getSiblingsOf,
 } from '../utils/familyOps';
-import { resizeImageFile } from '../utils/imageUtils';
 import { uploadDataUrlToStorage } from '../lib/supabase';
 import { PersonAvatar } from './PersonAvatar';
+import { ImageCropModal } from './ImageCropModal';
 
 interface QuickAddModalProps {
   data: FamilyTreeData;
@@ -123,6 +123,7 @@ export const QuickAddModal: React.FC<QuickAddModalProps> = ({
 
   const [searchTerm, setSearchTerm] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+  const [pendingCropFile, setPendingCropFile] = useState<File | null>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
 
   const linkCandidates = useMemo(() => {
@@ -143,17 +144,22 @@ export const QuickAddModal: React.FC<QuickAddModalProps> = ({
 
   const meta = RELATION_META[relation];
 
-  const handlePhotoChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handlePhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setErrorMsg('');
+    setPendingCropFile(file);
+    e.target.value = '';
+  };
+
+  const handleConfirmCrop = async (croppedDataUrl: string) => {
+    setPendingCropFile(null);
     try {
-      const dataUrl = await resizeImageFile(file, 256, 0.84);
-      const storedUrl = await uploadDataUrlToStorage(dataUrl, 'avatars');
+      const storedUrl = await uploadDataUrlToStorage(croppedDataUrl, 'avatars');
       setPhoto(storedUrl);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'ไม่สามารถอัปโหลดรูปภาพได้');
     }
-    e.target.value = '';
   };
 
   const handleSubmitNew = (e: React.FormEvent) => {
@@ -596,6 +602,15 @@ export const QuickAddModal: React.FC<QuickAddModalProps> = ({
           </div>
         )}
       </div>
+
+      {/* Touch & Zoom Avatar Crop Modal */}
+      {pendingCropFile && (
+        <ImageCropModal
+          file={pendingCropFile}
+          onCancel={() => setPendingCropFile(null)}
+          onConfirm={handleConfirmCrop}
+        />
+      )}
     </div>
   );
 };

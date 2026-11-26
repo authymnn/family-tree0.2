@@ -26,6 +26,7 @@ import {
   getChildrenOf,
   getDisplayNameWithNickname,
   getFullName,
+  getMemberFamilyColor,
   getSiblingRankInfo,
   getSiblingsOf,
 } from '../utils/familyOps';
@@ -69,6 +70,7 @@ export const PersonPreviewModal: React.FC<PersonPreviewModalProps> = ({
   const children = getChildrenOf(data.members, person.id);
   const siblings = getSiblingsOf(data.members, person.id);
   const siblingRank = getSiblingRankInfo(data.members, person.id);
+  const memberFamilyColor = getMemberFamilyColor(data.members, person.id);
   const age = calculateAge(person.birthDate, person.deathDate, person.isDeceased);
   const gallery = person.gallery ?? [];
 
@@ -94,7 +96,11 @@ export const PersonPreviewModal: React.FC<PersonPreviewModalProps> = ({
           <div className="flex items-center gap-1.5 flex-wrap min-w-0">
             {generation != null && (
               <span
-                style={{ backgroundColor: palette.primarySoft, color: palette.primary }}
+                style={{
+                  backgroundColor: `${memberFamilyColor}1F`,
+                  color: memberFamilyColor,
+                  border: `1px solid ${memberFamilyColor}44`,
+                }}
                 className="text-[11px] font-bold px-2.5 py-0.5 rounded-full"
               >
                 รุ่นที่ {generation}
@@ -102,8 +108,8 @@ export const PersonPreviewModal: React.FC<PersonPreviewModalProps> = ({
             )}
             {siblingRank && (
               <span
-                style={{ backgroundColor: palette.bgSurface, borderColor: palette.border }}
-                className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full border"
+                style={{ backgroundColor: memberFamilyColor, color: '#ffffff' }}
+                className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full shadow-2xs"
               >
                 {siblingRank.label}
               </span>

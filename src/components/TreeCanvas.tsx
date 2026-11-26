@@ -38,6 +38,7 @@ import { computeFamilyTreeLayout, PositionedCard } from '../utils/treeLayout';
 import { calculateAge, formatYearSpan } from '../utils/dateUtils';
 import {
   getCoupleColor,
+  getMemberFamilyColor,
   getSiblingRankInfo,
   getUnitFamilyColor,
 } from '../utils/familyOps';
@@ -890,6 +891,7 @@ export const TreeCanvas = React.forwardRef<TreeCanvasHandle, TreeCanvasProps>(
               const age = calculateAge(person.birthDate, person.deathDate, person.isDeceased);
               const yearSpan = formatYearSpan(person.birthDate, person.deathDate, person.isDeceased);
               const siblingRank = getSiblingRankInfo(data.members, person.id);
+              const memberFamilyColor = getMemberFamilyColor(data.members, person.id);
 
               const stripeColor = person.isDeceased
                 ? palette.textMuted
@@ -948,7 +950,7 @@ export const TreeCanvas = React.forwardRef<TreeCanvasHandle, TreeCanvasProps>(
                         <PersonAvatar person={person} size="lg" />
                         {siblingRank && (
                           <span
-                            style={{ backgroundColor: palette.primary, color: '#fff' }}
+                            style={{ backgroundColor: memberFamilyColor, color: '#fff' }}
                             title={siblingRank.label}
                             className="absolute -top-1 -right-1.5 min-w-[20px] h-5 px-1 rounded-full text-[10px] font-bold flex items-center justify-center shadow-xs"
                           >
@@ -990,7 +992,7 @@ export const TreeCanvas = React.forwardRef<TreeCanvasHandle, TreeCanvasProps>(
                         <PersonAvatar person={person} size="sm" />
                         {siblingRank && (
                           <span
-                            style={{ backgroundColor: palette.primary, color: '#fff' }}
+                            style={{ backgroundColor: memberFamilyColor, color: '#fff' }}
                             title={siblingRank.label}
                             className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full text-[9px] font-bold flex items-center justify-center"
                           >
@@ -1033,15 +1035,19 @@ export const TreeCanvas = React.forwardRef<TreeCanvasHandle, TreeCanvasProps>(
                         <div className="flex items-center justify-between gap-1 mb-0.5">
                           <div className="flex items-center gap-1 min-w-0">
                             <span
-                              style={{ backgroundColor: palette.bgSubtle, color: palette.textMuted }}
-                              className="text-[9.5px] font-medium px-1.5 py-0.2 rounded shrink-0"
+                              style={{
+                                backgroundColor: `${memberFamilyColor}1A`,
+                                color: memberFamilyColor,
+                                border: `1px solid ${memberFamilyColor}38`,
+                              }}
+                              className="text-[9.5px] font-semibold px-1.5 py-0.2 rounded shrink-0"
                             >
                               รุ่น {card.generation}
                             </span>
                             {siblingRank && (
                               <span
-                                style={{ backgroundColor: palette.primarySoft, color: palette.primary }}
-                                className="text-[9.5px] font-semibold px-1.5 py-0.2 rounded shrink-0"
+                                style={{ backgroundColor: memberFamilyColor, color: '#ffffff' }}
+                                className="text-[9.5px] font-semibold px-1.5 py-0.2 rounded shrink-0 shadow-2xs"
                                 title={siblingRank.label}
                               >
                                 {siblingRank.shortLabel}

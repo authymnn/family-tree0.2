@@ -148,27 +148,31 @@ function sortPeople(people: Person[]): Person[] {
   });
 }
 
-function countAllDescendants(
+function collectHiddenDescendants(
   members: Record<string, Person>,
   unitPrimaryId: string,
   spouseIds: string[],
-  visited = new Set<string>()
+  placed: Set<string>,
+  hiddenByCollapse: Set<string>,
+  localVisited = new Set<string>()
 ): number {
   const parentSet = new Set([unitPrimaryId, ...spouseIds]);
   let count = 0;
   for (const m of Object.values(members)) {
-    if (visited.has(m.id)) continue;
+    if (placed.has(m.id) || localVisited.has(m.id)) continue;
     if (m.parentIds.some((pid) => parentSet.has(pid))) {
-      visited.add(m.id);
+      localVisited.add(m.id);
+      hiddenByCollapse.add(m.id);
       count += 1;
       const mSpouses = m.spouses.map((s) => s.spouseId).filter((id) => members[id]);
       for (const sid of mSpouses) {
-        if (!visited.has(sid)) {
-          visited.add(sid);
+        if (!placed.has(sid) && !localVisited.has(sid)) {
+          localVisited.add(sid);
+          hiddenByCollapse.add(sid);
           count += 1;
         }
       }
-      count += countAllDescendants(members, m.id, mSpouses, visited);
+      count += collectHiddenDescendants(members, m.id, mSpouses, placed, hiddenByCollapse, localVisited);
     }
   }
   return count;
@@ -225,6 +229,7 @@ export function computeFamilyTreeLayout(
   };
 
   const placed = new Set<string>();
+  const hiddenByCollapse = new Set<string>();
   const rootUnits: FamilyUnit[] = [];
 
   const buildUnit = (primaryId: string, generation: number): FamilyUnit | null => {
@@ -243,13 +248,19 @@ export function computeFamilyTreeLayout(
     const unitParentIds = [primaryId, ...attachedSpouses];
     const directChildren = getChildrenOfUnit(unitParentIds, placed);
     const hasChildren = directChildren.length > 0;
-    const isCollapsed = hasChildren && collapsedIds.has(primaryId);
+    const isCollapsed = hasChildren && unitParentIds.some((id) => collapsedIds.has(id));
 
     const childUnits: FamilyUnit[] = [];
     let hiddenDescendantCount = 0;
 
     if (isCollapsed) {
-      hiddenDescendantCount = countAllDescendants(members, primaryId, attachedSpouses);
+      hiddenDescendantCount = collectHiddenDescendants(
+        members,
+        primaryId,
+        attachedSpouses,
+        placed,
+        hiddenByCollapse
+      );
     } else if (hasChildren) {
       for (const child of directChildren) {
         const childUnit = buildUnit(child.id, generation + 1);
@@ -310,14 +321,14 @@ export function computeFamilyTreeLayout(
     }
 
     for (const root of candidateRoots) {
-      if (!placed.has(root.id)) {
+      if (!placed.has(root.id) && !hiddenByCollapse.has(root.id)) {
         const unit = buildUnit(root.id, 1);
         if (unit) rootUnits.push(unit);
       }
     }
 
     for (const m of sortPeople(allMembers)) {
-      if (!placed.has(m.id)) {
+      if (!placed.has(m.id) && !hiddenByCollapse.has(m.id)) {
         const unit = buildUnit(m.id, 1);
         if (unit) rootUnits.push(unit);
       }

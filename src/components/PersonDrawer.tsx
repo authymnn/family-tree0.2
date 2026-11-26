@@ -37,9 +37,10 @@ import {
   getSiblingsOf,
 } from '../utils/familyOps';
 import { calculateAge, formatThaiDate } from '../utils/dateUtils';
-import { resizeGalleryImageFile, resizeImageFile } from '../utils/imageUtils';
+import { resizeGalleryImageFile } from '../utils/imageUtils';
 import { uploadDataUrlToStorage } from '../lib/supabase';
 import { PersonAvatar } from './PersonAvatar';
+import { ImageCropModal } from './ImageCropModal';
 
 interface PersonDrawerProps {
   data: FamilyTreeData;
@@ -103,6 +104,7 @@ export const PersonDrawer: React.FC<PersonDrawerProps> = ({
   const [quickNoteMode, setQuickNoteMode] = useState(false);
   const [quickNoteText, setQuickNoteText] = useState(person.notes || '');
   const [lightboxPhoto, setLightboxPhoto] = useState<PhotoItem | null>(null);
+  const [pendingCrop, setPendingCrop] = useState<{ file: File; mode: 'edit' | 'quick' } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const quickAvatarInputRef = useRef<HTMLInputElement>(null);
@@ -136,32 +138,36 @@ export const PersonDrawer: React.FC<PersonDrawerProps> = ({
   const age = calculateAge(person.birthDate, person.deathDate, person.isDeceased);
   const gallery = person.gallery ?? [];
 
-  const handlePhotoUploadEdit = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handlePhotoUploadEdit = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setUploadError('');
-    try {
-      const dataUrl = await resizeImageFile(file, 256, 0.84);
-      const storedUrl = await uploadDataUrlToStorage(dataUrl, 'avatars');
-      setDraft((prev) => ({ ...prev, photo: storedUrl }));
-    } catch (err) {
-      setUploadError(err instanceof Error ? err.message : 'อัปโหลดรูปไม่สำเร็จ');
-    }
+    setPendingCrop({ file, mode: 'edit' });
     e.target.value = '';
   };
 
-  // Instant 1-click avatar change right from View mode!
-  const handleQuickAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Instant 1-click avatar change right from View mode (with crop & zoom first!)
+  const handleQuickAvatarUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !canEdit) return;
+    setUploadError('');
+    setPendingCrop({ file, mode: 'quick' });
+    e.target.value = '';
+  };
+
+  const handleConfirmCrop = async (croppedDataUrl: string) => {
+    const mode = pendingCrop?.mode;
+    setPendingCrop(null);
     try {
-      const dataUrl = await resizeImageFile(file, 256, 0.84);
-      const storedUrl = await uploadDataUrlToStorage(dataUrl, 'avatars');
-      onSavePerson({ ...person, photo: storedUrl });
+      const storedUrl = await uploadDataUrlToStorage(croppedDataUrl, 'avatars');
+      if (mode === 'quick') {
+        onSavePerson({ ...person, photo: storedUrl });
+      } else {
+        setDraft((prev) => ({ ...prev, photo: storedUrl }));
+      }
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : 'อัปโหลดรูปไม่สำเร็จ');
     }
-    e.target.value = '';
   };
 
   // Add one or more photos to person's memory album
@@ -1350,6 +1356,15 @@ export const PersonDrawer: React.FC<PersonDrawerProps> = ({
             </div>
           )}
         </div>
+      )}
+
+      {/* Touch & Zoom Avatar Crop Modal */}
+      {pendingCrop && (
+        <ImageCropModal
+          file={pendingCrop.file}
+          onCancel={() => setPendingCrop(null)}
+          onConfirm={handleConfirmCrop}
+        />
       )}
     </aside>
   );

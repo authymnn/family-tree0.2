@@ -314,6 +314,12 @@ function inferInLawTitle(steps: KinshipStep[], b: Person): string {
   if (sig === 'spouse-parent') {
     return b.gender === 'male' ? 'พ่อตา / พ่อสามี' : 'แม่ยาย / แม่สามี';
   }
+  if (sig === 'parent-spouse') {
+    return b.gender === 'male' ? 'พ่อเลี้ยง' : 'แม่เลี้ยง';
+  }
+  if (sig === 'spouse-child') {
+    return b.gender === 'male' ? 'ลูกเลี้ยง (ชาย)' : 'ลูกเลี้ยง (หญิง)';
+  }
   if (sig === 'parent-child-spouse') {
     return b.gender === 'male' ? 'พี่เขย / น้องเขย' : 'พี่สะใภ้ / น้องสะใภ้';
   }
@@ -327,6 +333,402 @@ function inferInLawTitle(steps: KinshipStep[], b: Person): string {
     return b.gender === 'male' ? 'หลานเขย' : 'หลานสะใภ้';
   }
   return `ญาติเกี่ยวดอง (ห่าง ${steps.length} ขั้น)`;
+}
+
+export type MahramCategory =
+  | 'self'
+  | 'same-gender'
+  | 'spouse'
+  | 'mahram-blood'
+  | 'mahram-marriage'
+  | 'non-mahram';
+
+export interface MahramResult {
+  category: MahramCategory;
+  canTouch: boolean;
+  badgeText: string;
+  touchSummary: string;
+  reason: string;
+  detailNote?: string;
+  milkNote: string;
+  genderUncertain?: boolean;
+}
+
+const MILK_NOTE =
+  'หมายเหตุ: ระบบตรวจสอบจากสายเลือดและการแต่งงานในผังตระกูลเท่านั้น — หากมีความสัมพันธ์ทางการให้นม (แม่นม หรือพี่น้องร่วมนมครบตามเงื่อนไขศาสนา) จะถือเป็นมะฮ์รอมเพิ่มเติมได้';
+
+function getAncestorSet(members: Record<string, Person>, startId: string): Set<string> {
+  const result = new Set<string>();
+  const start = members[startId];
+  if (!start) return result;
+  const queue = [...start.parentIds];
+  while (queue.length > 0) {
+    const pid = queue.shift()!;
+    if (result.has(pid) || pid === startId || !members[pid]) continue;
+    result.add(pid);
+    for (const gpid of members[pid].parentIds) {
+      queue.push(gpid);
+    }
+  }
+  return result;
+}
+
+function getDescendantSet(members: Record<string, Person>, startId: string): Set<string> {
+  const result = new Set<string>();
+  const all = Object.values(members);
+  const queue = [startId];
+  while (queue.length > 0) {
+    const curr = queue.shift()!;
+    for (const m of all) {
+      if (m.id !== startId && !result.has(m.id) && m.parentIds.includes(curr)) {
+        result.add(m.id);
+        queue.push(m.id);
+      }
+    }
+  }
+  return result;
+}
+
+function getSiblingSet(members: Record<string, Person>, personId: string): Set<string> {
+  const result = new Set<string>();
+  const p = members[personId];
+  if (!p || p.parentIds.length === 0) return result;
+  const parentSet = new Set(p.parentIds);
+  for (const m of Object.values(members)) {
+    if (m.id !== personId && m.parentIds.some((pid) => parentSet.has(pid))) {
+      result.add(m.id);
+    }
+  }
+  return result;
+}
+
+function getSpouseSet(members: Record<string, Person>, personId: string): Set<string> {
+  const result = new Set<string>();
+  const p = members[personId];
+  if (p) {
+    for (const sp of p.spouses) {
+      if (members[sp.spouseId]) result.add(sp.spouseId);
+    }
+  }
+  for (const m of Object.values(members)) {
+    if (m.id !== personId && m.spouses.some((s) => s.spouseId === personId)) {
+      result.add(m.id);
+    }
+  }
+  return result;
+}
+
+/**
+ * Evaluate Islamic Mahram (มะฮ์รอม) status and physical contact permissibility between two family members.
+ */
+export function evaluateMahramStatus(
+  members: Record<string, Person>,
+  personAId: string,
+  personBId: string
+): MahramResult | null {
+  const a = members[personAId];
+  const b = members[personBId];
+  if (!a || !b) return null;
+
+  if (personAId === personBId) {
+    return {
+      category: 'self',
+      canTouch: true,
+      badgeText: 'บุคคลเดียวกัน',
+      touchSummary: 'เป็นบุคคลเดียวกัน',
+      reason: `${a.firstName} คือบุคคลเดียวกัน`,
+      milkNote: MILK_NOTE,
+    };
+  }
+
+  const genderUncertain = a.gender === 'other' || b.gender === 'other';
+
+  // Same gender (both male or both female)
+  if (!genderUncertain && a.gender === b.gender) {
+    const genderText = a.gender === 'male' ? 'ผู้ชายเหมือนกัน' : 'ผู้หญิงเหมือนกัน';
+    return {
+      category: 'same-gender',
+      canTouch: true,
+      badgeText: 'เพศเดียวกัน',
+      touchSummary: 'สามารถสัมผัสตัว / สลามจับมือกันได้',
+      reason: `ทั้งสองคนเป็น${genderText} จึงสามารถแตะต้องตัวและทักทายจับมือกันได้ตามปกติ`,
+      detailNote: 'ยังคงรักษาขอบเขตเอาเราะฮ์ระหว่างเพศเดียวกันตามหลักศาสนา',
+      milkNote: MILK_NOTE,
+    };
+  }
+
+  // 1. Direct Spouse check (highest priority for opposite gender)
+  const spLink =
+    a.spouses.find((s) => s.spouseId === personBId) ||
+    b.spouses.find((s) => s.spouseId === personAId);
+  if (spLink) {
+    if (spLink.status === 'divorced') {
+      return {
+        category: 'non-mahram',
+        canTouch: false,
+        badgeText: 'ไม่ใช่ มะฮ์รอม (หย่าร้างแล้ว)',
+        touchSummary: 'ห้ามสัมผัสตัว / จับมือกัน',
+        reason: 'เคยเป็นคู่สมรสแต่หย่าร้างกันแล้ว จึงถือเป็นคนนอกต่อกันตามหลักศาสนา',
+        detailNote: 'ยกเว้นกรณีอยู่ในช่วงอิดดะฮ์ของการหย่าที่คืนดีได้ (ตามเงื่อนไขศาสนา)',
+        milkNote: MILK_NOTE,
+        genderUncertain,
+      };
+    }
+    return {
+      category: 'spouse',
+      canTouch: true,
+      badgeText: 'คู่สมรส (ทางการแต่งงาน)',
+      touchSummary: 'สามารถสัมผัสตัวและใกล้ชิดกันได้',
+      reason: 'เป็นสามี-ภรรยากันตามหลักการแต่งงาน จึงอนุญาตให้ใกล้ชิดและสัมผัสตัวกันได้',
+      detailNote:
+        'หมายเหตุเรื่องน้ำละหมาด: ตามมัซฮับชาฟิอี การสัมผัสผิวหนังระหว่างสามี-ภรรยาโดยตรงทำให้เสียน้ำละหมาด',
+      milkNote: MILK_NOTE,
+      genderUncertain,
+    };
+  }
+
+  const ancA = getAncestorSet(members, personAId);
+  const descA = getDescendantSet(members, personAId);
+  const sibA = getSiblingSet(members, personAId);
+  const spouseA = getSpouseSet(members, personAId);
+
+  // 2. Permanent Mahram by Blood (ทางสายเลือด / นะซับ)
+  if (ancA.has(personBId)) {
+    return {
+      category: 'mahram-blood',
+      canTouch: true,
+      badgeText: 'เป็นมะฮ์รอม (ทางสายเลือด)',
+      touchSummary: 'สามารถสัมผัสตัว / สลามจับมือกันได้',
+      reason: 'เป็นบุพการีสายตรง (พ่อ แม่ ปู่ ย่า ตา ยาย ทวด ขึ้นไปทุกชั้น) จึงเป็นมะฮ์รอมถาวร',
+      detailNote: 'การสัมผัสตัวกับมะฮ์รอมทางสายเลือดไม่ทำให้เสียน้ำละหมาด',
+      milkNote: MILK_NOTE,
+      genderUncertain,
+    };
+  }
+
+  if (descA.has(personBId)) {
+    return {
+      category: 'mahram-blood',
+      canTouch: true,
+      badgeText: 'เป็นมะฮ์รอม (ทางสายเลือด)',
+      touchSummary: 'สามารถสัมผัสตัว / สลามจับมือกันได้',
+      reason: 'เป็นผู้สืบสันดานสายตรง (ลูก หลาน เหลน ลื่อ ลงไปทุกชั้น) จึงเป็นมะฮ์รอมถาวร',
+      detailNote: 'การสัมผัสตัวกับมะฮ์รอมทางสายเลือดไม่ทำให้เสียน้ำละหมาด',
+      milkNote: MILK_NOTE,
+      genderUncertain,
+    };
+  }
+
+  if (sibA.has(personBId)) {
+    return {
+      category: 'mahram-blood',
+      canTouch: true,
+      badgeText: 'เป็นมะฮ์รอม (ทางสายเลือด)',
+      touchSummary: 'สามารถสัมผัสตัว / สลามจับมือกันได้',
+      reason: 'เป็นพี่น้องร่วมพ่อแม่ (หรือร่วมพ่อ / ร่วมแม่เดียวกัน) จึงเป็นมะฮ์รอมถาวร',
+      detailNote: 'การสัมผัสตัวกับพี่น้องทางสายเลือดไม่ทำให้เสียน้ำละหมาด',
+      milkNote: MILK_NOTE,
+      genderUncertain,
+    };
+  }
+
+  // Descendant of A's sibling (หลาน/เหลนของพี่น้อง)
+  for (const sId of sibA) {
+    if (getDescendantSet(members, sId).has(personBId)) {
+      return {
+        category: 'mahram-blood',
+        canTouch: true,
+        badgeText: 'เป็นมะฮ์รอม (ทางสายเลือด)',
+        touchSummary: 'สามารถสัมผัสตัว / สลามจับมือกันได้',
+        reason: 'เป็นลูกหลานของพี่น้อง (หลานแท้ๆ ลงไปทุกชั้น) จึงเป็นมะฮ์รอมถาวรทางสายเลือด',
+        detailNote: 'การสัมผัสตัวกับหลานของพี่น้องไม่ทำให้เสียน้ำละหมาด',
+        milkNote: MILK_NOTE,
+        genderUncertain,
+      };
+    }
+  }
+
+  // Sibling of any ancestor of A (ลุง ป้า น้า อา, ปู่เล็ก ย่าเล็ก ตาเล็ก ยายเล็ก ขึ้นไปทุกชั้น)
+  for (const aId of ancA) {
+    if (getSiblingSet(members, aId).has(personBId)) {
+      return {
+        category: 'mahram-blood',
+        canTouch: true,
+        badgeText: 'เป็นมะฮ์รอม (ทางสายเลือด)',
+        touchSummary: 'สามารถสัมผัสตัว / สลามจับมือกันได้',
+        reason: 'เป็นพี่น้องของพ่อแม่หรือบุพการี (ลุง ป้า น้า อา แท้ๆ ทางสายเลือด) จึงเป็นมะฮ์รอมถาวร',
+        detailNote: 'การสัมผัสตัวกับลุง ป้า น้า อา แท้ๆ ไม่ทำให้เสียน้ำละหมาด (เฉพาะญาติสายเลือด ไม่รวมคู่สมรสของท่าน)',
+        milkNote: MILK_NOTE,
+        genderUncertain,
+      };
+    }
+  }
+
+  // 3. Permanent Mahram by Marriage (ทางการแต่งงาน / มุศอฮะเราะฮ์)
+  // 3a. Ancestors of A's spouse (พ่อตา แม่ยาย พ่อสามี แม่สามี ปู่ย่าตายายของคู่สมรส)
+  for (const spId of spouseA) {
+    if (getAncestorSet(members, spId).has(personBId)) {
+      return {
+        category: 'mahram-marriage',
+        canTouch: true,
+        badgeText: 'เป็นมะฮ์รอม (ทางการแต่งงาน)',
+        touchSummary: 'สามารถสัมผัสตัว / สลามจับมือกันได้',
+        reason: 'เป็นพ่อตา แม่ยาย พ่อสามี แม่สามี หรือบุพการีของคู่สมรส จึงเป็นมะฮ์รอมถาวรทางการแต่งงาน',
+        detailNote: 'เป็นมะฮ์รอมถาวรทันทีที่มีการทำอากัดนิกะห์ (แม้ต่อมาจะหย่าร้างหรือคู่สมรสเสียชีวิต)',
+        milkNote: MILK_NOTE,
+        genderUncertain,
+      };
+    }
+  }
+
+  // 3b. Spouse of any ancestor of A (พ่อเลี้ยง แม่เลี้ยง คู่สมรสของปู่ย่าตายาย)
+  for (const aId of ancA) {
+    if (getSpouseSet(members, aId).has(personBId)) {
+      return {
+        category: 'mahram-marriage',
+        canTouch: true,
+        badgeText: 'เป็นมะฮ์รอม (ทางการแต่งงาน)',
+        touchSummary: 'สามารถสัมผัสตัว / สลามจับมือกันได้',
+        reason: 'เป็นคู่สมรสของพ่อแม่หรือบุพการี (พ่อเลี้ยง / แม่เลี้ยง) จึงเป็นมะฮ์รอมถาวรทางการแต่งงาน',
+        detailNote: 'เป็นมะฮ์รอมถาวรทางการแต่งงานเมื่อสมรสถูกต้องตามหลักศาสนา',
+        milkNote: MILK_NOTE,
+        genderUncertain,
+      };
+    }
+  }
+
+  // 3c. Spouse of any descendant of A (ลูกเขย ลูกสะใภ้ หลานเขย หลานสะใภ้)
+  for (const dId of descA) {
+    if (getSpouseSet(members, dId).has(personBId)) {
+      return {
+        category: 'mahram-marriage',
+        canTouch: true,
+        badgeText: 'เป็นมะฮ์รอม (ทางการแต่งงาน)',
+        touchSummary: 'สามารถสัมผัสตัว / สลามจับมือกันได้',
+        reason: 'เป็นลูกเขย ลูกสะใภ้ หรือคู่สมรสของผู้สืบสันดาน จึงเป็นมะฮ์รอมถาวรทางการแต่งงาน',
+        detailNote: 'เป็นมะฮ์รอมถาวรทันทีเมื่อบุตร/หลานทำอากัดนิกะห์ถูกต้องตามหลักศาสนา',
+        milkNote: MILK_NOTE,
+        genderUncertain,
+      };
+    }
+  }
+
+  // 3d. Descendants of A's spouse (ลูกเลี้ยง หลานเลี้ยง)
+  for (const spId of spouseA) {
+    if (getDescendantSet(members, spId).has(personBId)) {
+      return {
+        category: 'mahram-marriage',
+        canTouch: true,
+        badgeText: 'เป็นมะฮ์รอม (ทางการแต่งงาน)',
+        touchSummary: 'สามารถสัมผัสตัว / สลามจับมือกันได้ (เมื่อสมรสสมบูรณ์แล้ว)',
+        reason: 'เป็นลูกเลี้ยง หรือหลานเลี้ยง (บุตรติดของคู่สมรส) เป็นมะฮ์รอมทางการแต่งงาน',
+        detailNote: 'เงื่อนไขสำคัญตามหลักศาสนา: ลูกเลี้ยงจะเป็นมะฮ์รอมถาวรเมื่อมีการสมรสและร่วมหลับนอนกับคู่สมรสสมบูรณ์แล้ว',
+        milkNote: MILK_NOTE,
+        genderUncertain,
+      };
+    }
+  }
+
+  // 4. Non-Mahram (ไม่ใช่มะฮ์รอม / อัจนะบีย์) — identify frequently misunderstood cases clearly!
+  // 4a. Sibling-in-law (พี่เขย น้องเขย พี่สะใภ้ น้องสะใภ้)
+  let isSiblingSpouse = false;
+  for (const sId of sibA) {
+    if (getSpouseSet(members, sId).has(personBId)) {
+      isSiblingSpouse = true;
+      break;
+    }
+  }
+  let isSpouseSibling = false;
+  for (const spId of spouseA) {
+    if (getSiblingSet(members, spId).has(personBId)) {
+      isSpouseSibling = true;
+      break;
+    }
+  }
+  if (isSiblingSpouse || isSpouseSibling) {
+    return {
+      category: 'non-mahram',
+      canTouch: false,
+      badgeText: 'ไม่ใช่ มะฮ์รอม',
+      touchSummary: 'ห้ามสัมผัสตัว / จับมือกัน',
+      reason:
+        'พี่เขย น้องเขย พี่สะใภ้ น้องสะใภ้ (คู่สมรสของพี่น้องเรา หรือพี่น้องของคู่สมรสเรา) ไม่ใช่มะฮ์รอม',
+      detailNote:
+        'มักเข้าใจผิดกันบ่อย: ห้ามแตะต้องตัวกันและต้องรักษาฮิญาบ/ขอบเขต (พี่น้องของคู่สมรสเป็นเพียงข้อห้ามแต่งงานซ้อนชั่วคราว ไม่ใช่มะฮ์รอมที่สัมผัสตัวได้)',
+      milkNote: MILK_NOTE,
+      genderUncertain,
+    };
+  }
+
+  // 4b. Cousins (ลูกพี่ลูกน้อง หรือลูกหลานของลุง ป้า น้า อา)
+  const ancB = getAncestorSet(members, personBId);
+  let sharesBloodAncestor = false;
+  for (const aId of ancA) {
+    if (ancB.has(aId)) {
+      sharesBloodAncestor = true;
+      break;
+    }
+  }
+  if (sharesBloodAncestor) {
+    return {
+      category: 'non-mahram',
+      canTouch: false,
+      badgeText: 'ไม่ใช่ มะฮ์รอม',
+      touchSummary: 'ห้ามสัมผัสตัว / จับมือกัน',
+      reason: 'ลูกพี่ลูกน้อง (ลูกหรือลูกหลานของลุง ป้า น้า อา) ไม่ใช่มะฮ์รอมตามหลักศาสนา',
+      detailNote: 'มักเข้าใจผิดกันบ่อย: แม้จะสนิทกันเหมือนพี่น้องแต่ไม่ใช่มะฮ์รอม ห้ามสัมผัสตัว/จับมือกัน และต้องรักษาขอบเขตเอาเราะฮ์',
+      milkNote: MILK_NOTE,
+      genderUncertain,
+    };
+  }
+
+  // 4c. Spouse of uncle/aunt (ลุงเขย ป้าสะใภ้ น้าเขย อาสะใภ้)
+  let isUncleAuntSpouse = false;
+  for (const aId of ancA) {
+    for (const uaId of getSiblingSet(members, aId)) {
+      if (getSpouseSet(members, uaId).has(personBId)) {
+        isUncleAuntSpouse = true;
+        break;
+      }
+    }
+    if (isUncleAuntSpouse) break;
+  }
+  // Symmetric check: B's uncle/aunt's spouse is A
+  if (!isUncleAuntSpouse) {
+    for (const bAncId of ancB) {
+      for (const uaId of getSiblingSet(members, bAncId)) {
+        if (getSpouseSet(members, uaId).has(personAId)) {
+          isUncleAuntSpouse = true;
+          break;
+        }
+      }
+      if (isUncleAuntSpouse) break;
+    }
+  }
+  if (isUncleAuntSpouse) {
+    return {
+      category: 'non-mahram',
+      canTouch: false,
+      badgeText: 'ไม่ใช่ มะฮ์รอม',
+      touchSummary: 'ห้ามสัมผัสตัว / จับมือกัน',
+      reason: 'คู่สมรสของลุง ป้า น้า อา (ลุงเขย ป้าสะใภ้ น้าเขย อาสะใภ้) ไม่ใช่มะฮ์รอมทางสายเลือด',
+      detailNote: 'เฉพาะลุง ป้า น้า อา ที่เป็นพี่น้องแท้ๆ ของพ่อแม่เท่านั้นที่เป็นมะฮ์รอม ไม่รวมคู่สมรสของท่าน',
+      milkNote: MILK_NOTE,
+      genderUncertain,
+    };
+  }
+
+  // 4d. All other non-mahram / distant in-laws / unrelated
+  return {
+    category: 'non-mahram',
+    canTouch: false,
+    badgeText: 'ไม่ใช่ มะฮ์รอม',
+    touchSummary: 'ห้ามสัมผัสตัว / จับมือกัน',
+    reason: 'ความสัมพันธ์นี้ไม่อยู่ในขอบเขตมะฮ์รอมทางสายเลือดหรือการแต่งงาน (ถือเป็นอัจนะบีย์)',
+    detailNote: 'ห้ามสัมผัสตัว/จับมือกัน และต้องรักษาขอบเขตฮิญาบ/เอาเราะฮ์ตามหลักศาสนา',
+    milkNote: MILK_NOTE,
+    genderUncertain,
+  };
 }
 
 /**

@@ -411,6 +411,28 @@ export function getUnitFamilyColor(
   return getCoupleColor(primary.id);
 }
 
+/**
+ * Resolve the household/family color for a specific member:
+ * - If they have parents, use their parents' family color (matches the branch line into their card!)
+ * - Otherwise (root ancestor), use their own couple color (or deterministic color by ID)
+ */
+export function getMemberFamilyColor(
+  members: Record<string, Person>,
+  personId: string
+): string {
+  const person = members[personId];
+  if (!person) return FAMILY_COLOR_SWATCHES[0];
+  if (person.parentIds.length > 0) {
+    return getUnitFamilyColor(members, person.parentIds);
+  }
+  if (person.spouses.length > 0) {
+    const firstSp = person.spouses[0];
+    const partnerSp = members[firstSp.spouseId]?.spouses.find((s) => s.spouseId === person.id);
+    return getCoupleColor(person.id, firstSp.spouseId, firstSp.color || partnerSp?.color);
+  }
+  return getCoupleColor(person.id);
+}
+
 export interface CoupleUnitSummary {
   id: string;
   personA: Person;
