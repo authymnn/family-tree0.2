@@ -618,39 +618,11 @@ export const TreeCanvas = React.forwardRef<TreeCanvasHandle, TreeCanvasProps>(
         {/* Atmospheric Decorative / Custom Image Background */}
         <CanvasBackground themeSettings={themeSettings} palette={palette} />
 
-        {/* Top-left floating bar: View Options + Multi-Checkbox Tree Filter + Active Focus/Highlight Banners */}
+        {/* Top-left floating bar: Multi-Checkbox Tree Filter + Active Focus/Highlight Banners */}
         <div className="absolute top-4 left-4 z-20 flex flex-wrap items-center gap-2 max-w-[calc(100%-32px)] pointer-events-none">
-          {/* Trigger Buttons Row + Anchored Popovers */}
+          {/* Smart Multi-Filter Trigger + Popover */}
           <div className="relative pointer-events-auto">
             <div className="flex flex-wrap items-center gap-1.5">
-              {/* View Options ("มุมมองการดู") Button */}
-              <button
-                type="button"
-                onClick={() => {
-                  setShowViewMenu((v) => !v);
-                  setShowFilterMenu(false);
-                }}
-                style={
-                  showViewMenu
-                    ? { backgroundColor: palette.accent, color: '#fff', borderColor: palette.accent }
-                    : { backgroundColor: floatingBarBg, color: palette.textMain, borderColor: palette.border }
-                }
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border backdrop-blur-md shadow-sm text-xs font-semibold hover:opacity-90 transition-all cursor-pointer"
-              >
-                <LayoutGrid className="w-3.5 h-3.5" />
-                <span>มุมมองการดู</span>
-                <span
-                  style={
-                    showViewMenu
-                      ? { backgroundColor: 'rgba(255,255,255,0.25)', color: '#fff' }
-                      : { backgroundColor: palette.bgSubtle, color: palette.textMuted }
-                  }
-                  className="px-1.5 py-0.2 rounded-full text-[10px] font-bold"
-                >
-                  {Math.round(transform.scale * 100)}%
-                </span>
-              </button>
-
               {/* Tree Filter ("ตัวกรองผัง") Button */}
               <button
                 type="button"
@@ -688,185 +660,7 @@ export const TreeCanvas = React.forwardRef<TreeCanvasHandle, TreeCanvasProps>(
               )}
             </div>
 
-            {/* Popover 1: View Options ("มุมมองการดู") */}
-            {showViewMenu && (
-              <div
-                style={{
-                  backgroundColor: palette.bgSurface,
-                  borderColor: palette.border,
-                  color: palette.textMain,
-                }}
-                className="absolute left-0 top-full mt-2 w-[300px] sm:w-[330px] max-w-[calc(100vw-32px)] max-h-[72vh] rounded-2xl border shadow-2xl overflow-hidden flex flex-col animate-fade-in"
-              >
-                <div
-                  style={{ backgroundColor: palette.bgSubtle, borderColor: palette.border }}
-                  className="px-4 py-2.5 border-b flex items-center justify-between gap-2"
-                >
-                  <div className="flex items-center gap-2">
-                    <LayoutGrid className="w-3.5 h-3.5" style={{ color: palette.accent }} />
-                    <span className="text-xs font-bold">มุมมองการดูผังตระกูล</span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setShowViewMenu(false)}
-                    className="p-1 rounded-lg hover:bg-black/5 cursor-pointer"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-
-                <div className="p-3.5 space-y-3.5 overflow-y-auto text-xs">
-                  {/* 1. Zoom Controls */}
-                  <div className="space-y-1.5">
-                    <div style={{ color: palette.textMuted }} className="text-[11px] font-semibold">
-                      ขนาดการซูม ({Math.round(transform.scale * 100)}%)
-                    </div>
-                    <div className="grid grid-cols-[auto_1fr_auto_auto] items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => zoomBy(0.84)}
-                        style={{ backgroundColor: palette.bgSubtle, borderColor: palette.border }}
-                        className="p-2 rounded-xl border hover:opacity-85 cursor-pointer"
-                        title="ซูมออก"
-                      >
-                        <ZoomOut className="w-4 h-4" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={fitToScreen}
-                        style={{ backgroundColor: palette.bgSubtle, borderColor: palette.border }}
-                        className="py-2 px-2 rounded-xl border text-xs font-bold text-center hover:opacity-85 cursor-pointer"
-                        title="ปรับขนาดให้พอดีหน้าจอ"
-                      >
-                        {Math.round(transform.scale * 100)}%
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => zoomBy(1.2)}
-                        style={{ backgroundColor: palette.bgSubtle, borderColor: palette.border }}
-                        className="p-2 rounded-xl border hover:opacity-85 cursor-pointer"
-                        title="ซูมเข้า"
-                      >
-                        <ZoomIn className="w-4 h-4" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={fitToScreen}
-                        style={{ backgroundColor: palette.primarySoft, color: palette.primary, borderColor: palette.primary }}
-                        className="inline-flex items-center gap-1 px-2.5 py-2 rounded-xl border text-[11px] font-semibold hover:opacity-85 cursor-pointer"
-                        title="จัดกึ่งกลางพอดีจอ"
-                      >
-                        <Maximize2 className="w-3.5 h-3.5" />
-                        พอดีจอ
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* 2. Card Style */}
-                  <div className="space-y-1.5 pt-2 border-t" style={{ borderColor: palette.border }}>
-                    <div style={{ color: palette.textMuted }} className="text-[11px] font-semibold">
-                      รูปแบบการ์ดสมาชิก
-                    </div>
-                    <div className="grid grid-cols-3 gap-1.5">
-                      {CARD_STYLE_OPTIONS.map(({ id, label, title, icon: Icon }) => {
-                        const active = cardStyle === id;
-                        return (
-                          <button
-                            key={id}
-                            type="button"
-                            onClick={() => onChangeCardStyle(id)}
-                            title={title}
-                            style={
-                              active
-                                ? { backgroundColor: palette.primary, color: '#fff', borderColor: palette.primary }
-                                : { backgroundColor: palette.bgSubtle, borderColor: palette.border }
-                            }
-                            className="flex flex-col items-center justify-center gap-1 py-2 px-1.5 rounded-xl border text-[11px] font-semibold transition-colors cursor-pointer"
-                          >
-                            <Icon className="w-4 h-4" />
-                            <span>{label}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  {/* 3. Tree Orientation */}
-                  <div className="space-y-1.5 pt-2 border-t" style={{ borderColor: palette.border }}>
-                    <div style={{ color: palette.textMuted }} className="text-[11px] font-semibold">
-                      ทิศทางของแผนผัง
-                    </div>
-                    <div className="grid grid-cols-3 gap-1.5">
-                      {ORIENTATION_OPTIONS.map(({ id, label, title, icon: Icon }) => {
-                        const active = orientation === id;
-                        return (
-                          <button
-                            key={id}
-                            type="button"
-                            onClick={() => onChangeOrientation(id)}
-                            title={title}
-                            style={
-                              active
-                                ? { backgroundColor: palette.accent, color: '#fff', borderColor: palette.accent }
-                                : { backgroundColor: palette.bgSubtle, borderColor: palette.border }
-                            }
-                            className="flex flex-col items-center justify-center gap-1 py-2 px-1.5 rounded-xl border text-[11px] font-semibold transition-colors cursor-pointer"
-                          >
-                            <Icon className="w-4 h-4" />
-                            <span>{label}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  {/* 4. Branch Collapse/Expand & Minimap */}
-                  <div className="space-y-1.5 pt-2 border-t" style={{ borderColor: palette.border }}>
-                    <div style={{ color: palette.textMuted }} className="text-[11px] font-semibold">
-                      การพับ-กางสาย & แผนที่ย่อ
-                    </div>
-                    <div className="grid grid-cols-3 gap-1.5">
-                      <button
-                        type="button"
-                        onClick={onExpandAll}
-                        style={{ backgroundColor: palette.bgSubtle, borderColor: palette.border }}
-                        className="inline-flex items-center justify-center gap-1 py-2 px-2 rounded-xl border text-[11px] font-semibold hover:opacity-85 cursor-pointer"
-                        title="กางออกทุกสาย"
-                      >
-                        <Expand className="w-3.5 h-3.5" />
-                        กางหมด
-                      </button>
-                      <button
-                        type="button"
-                        onClick={onCollapseToLevel2}
-                        style={{ backgroundColor: palette.bgSubtle, borderColor: palette.border }}
-                        className="inline-flex items-center justify-center gap-1 py-2 px-2 rounded-xl border text-[11px] font-semibold hover:opacity-85 cursor-pointer"
-                        title="พับกิ่งรุ่นลูกหลาน"
-                      >
-                        <Shrink className="w-3.5 h-3.5" />
-                        พับกิ่ง
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setShowMinimap((m) => !m)}
-                        style={
-                          showMinimap
-                            ? { backgroundColor: palette.primarySoft, color: palette.primary, borderColor: palette.primary }
-                            : { backgroundColor: palette.bgSubtle, borderColor: palette.border }
-                        }
-                        className="inline-flex items-center justify-center gap-1 py-2 px-2 rounded-xl border text-[11px] font-semibold hover:opacity-85 cursor-pointer"
-                        title={showMinimap ? 'ซ่อนแผนที่ย่อ' : 'แสดงแผนที่ย่อ'}
-                      >
-                        <MapIcon className="w-3.5 h-3.5" />
-                        แผนที่
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Popover 2: Tree Filter ("ตัวกรองผัง") */}
+            {/* Popover: Tree Filter ("ตัวกรองผัง") */}
             {showFilterMenu && (
               <div
                 style={{
@@ -1245,62 +1039,271 @@ export const TreeCanvas = React.forwardRef<TreeCanvasHandle, TreeCanvasProps>(
           )}
         </div>
 
-        {/* Interactive Minimap (Bottom-Right Corner — super helpful for big families!) */}
-        {showMinimap && layout.cards.length >= 4 && (
-          <div
-            onClick={handleMinimapClick}
-            style={{
-              width: MINIMAP_W,
-              height: MINIMAP_H,
-              backgroundColor: floatingBarBg,
-              borderColor: palette.border,
-            }}
-            title="แผนที่ย่อ — คลิกตรงไหนก็ได้เพื่อเลื่อนไปดูทันที"
-            className="hidden md:block absolute bottom-4 right-4 z-20 rounded-xl border shadow-md backdrop-blur-md overflow-hidden cursor-pointer"
-          >
-            {/* Tiny node blocks */}
-            {layout.cards.map((c) => (
-              <div
-                key={`mini_${c.person.id}`}
-                style={{
-                  left: miniOffsetX + c.x * miniScale,
-                  top: miniOffsetY + c.y * miniScale,
-                  width: Math.max(3, c.width * miniScale),
-                  height: Math.max(2.5, c.height * miniScale),
-                  backgroundColor:
-                    selectedPersonId === c.person.id
-                      ? palette.accent
-                      : c.person.gender === 'male'
-                        ? palette.primary
-                        : palette.accent,
-                  opacity: selectedPersonId === c.person.id ? 1 : 0.65,
-                }}
-                className="absolute rounded-[2px] pointer-events-none"
-              />
-            ))}
-
-            {/* Current Viewport Indicator Box */}
-            {(() => {
-              const viewLeft = (-transform.x / transform.scale) * miniScale + miniOffsetX;
-              const viewTop = (-transform.y / transform.scale) * miniScale + miniOffsetY;
-              const viewW = (viewportSize.width / transform.scale) * miniScale;
-              const viewH = (viewportSize.height / transform.scale) * miniScale;
-              return (
+        {/* Bottom-Right Corner Stack: Interactive Minimap + View Options ("มุมมองการดู") Button & Upward Popover */}
+        <div className="absolute bottom-4 right-4 z-20 flex flex-col items-end gap-2 pointer-events-none">
+          {showMinimap && layout.cards.length >= 4 && (
+            <div
+              onClick={handleMinimapClick}
+              style={{
+                width: MINIMAP_W,
+                height: MINIMAP_H,
+                backgroundColor: floatingBarBg,
+                borderColor: palette.border,
+              }}
+              title="แผนที่ย่อ — คลิกตรงไหนก็ได้เพื่อเลื่อนไปดูทันที"
+              className="pointer-events-auto hidden md:block relative rounded-xl border shadow-md backdrop-blur-md overflow-hidden cursor-pointer"
+            >
+              {/* Tiny node blocks */}
+              {layout.cards.map((c) => (
                 <div
+                  key={`mini_${c.person.id}`}
                   style={{
-                    left: Math.max(0, viewLeft),
-                    top: Math.max(0, viewTop),
-                    width: Math.min(MINIMAP_W, Math.max(12, viewW)),
-                    height: Math.min(MINIMAP_H, Math.max(10, viewH)),
-                    borderColor: palette.primary,
-                    backgroundColor: palette.primarySoft,
+                    left: miniOffsetX + c.x * miniScale,
+                    top: miniOffsetY + c.y * miniScale,
+                    width: Math.max(3, c.width * miniScale),
+                    height: Math.max(2.5, c.height * miniScale),
+                    backgroundColor:
+                      selectedPersonId === c.person.id
+                        ? palette.accent
+                        : c.person.gender === 'male'
+                          ? palette.primary
+                          : palette.accent,
+                    opacity: selectedPersonId === c.person.id ? 1 : 0.65,
                   }}
-                  className="absolute border-[1.5px] rounded-sm opacity-45 pointer-events-none"
+                  className="absolute rounded-[2px] pointer-events-none"
                 />
-              );
-            })()}
+              ))}
+
+              {/* Current Viewport Indicator Box */}
+              {(() => {
+                const viewLeft = (-transform.x / transform.scale) * miniScale + miniOffsetX;
+                const viewTop = (-transform.y / transform.scale) * miniScale + miniOffsetY;
+                const viewW = (viewportSize.width / transform.scale) * miniScale;
+                const viewH = (viewportSize.height / transform.scale) * miniScale;
+                return (
+                  <div
+                    style={{
+                      left: Math.max(0, viewLeft),
+                      top: Math.max(0, viewTop),
+                      width: Math.min(MINIMAP_W, Math.max(12, viewW)),
+                      height: Math.min(MINIMAP_H, Math.max(10, viewH)),
+                      borderColor: palette.primary,
+                      backgroundColor: palette.primarySoft,
+                    }}
+                    className="absolute border-[1.5px] rounded-sm opacity-45 pointer-events-none"
+                  />
+                );
+              })()}
+            </div>
+          )}
+
+          {/* Bottom-Right View Options ("มุมมองการดู") Button + Upward Popover */}
+          <div className="relative pointer-events-auto">
+            {showViewMenu && (
+              <div
+                style={{
+                  backgroundColor: palette.bgSurface,
+                  borderColor: palette.border,
+                  color: palette.textMain,
+                }}
+                className="absolute right-0 bottom-full mb-2 w-[300px] sm:w-[330px] max-w-[calc(100vw-32px)] max-h-[72vh] rounded-2xl border shadow-2xl overflow-hidden flex flex-col animate-fade-in"
+              >
+                <div
+                  style={{ backgroundColor: palette.bgSubtle, borderColor: palette.border }}
+                  className="px-4 py-2.5 border-b flex items-center justify-between gap-2"
+                >
+                  <div className="flex items-center gap-2">
+                    <LayoutGrid className="w-3.5 h-3.5" style={{ color: palette.accent }} />
+                    <span className="text-xs font-bold">มุมมองการดูผังตระกูล</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowViewMenu(false)}
+                    className="p-1 rounded-lg hover:bg-black/5 cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                <div className="p-3.5 space-y-3.5 overflow-y-auto text-xs">
+                  {/* 1. Zoom Controls */}
+                  <div className="space-y-1.5">
+                    <div style={{ color: palette.textMuted }} className="text-[11px] font-semibold">
+                      ขนาดการซูม ({Math.round(transform.scale * 100)}%)
+                    </div>
+                    <div className="grid grid-cols-[auto_1fr_auto_auto] items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => zoomBy(0.84)}
+                        style={{ backgroundColor: palette.bgSubtle, borderColor: palette.border }}
+                        className="p-2 rounded-xl border hover:opacity-85 cursor-pointer"
+                        title="ซูมออก"
+                      >
+                        <ZoomOut className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={fitToScreen}
+                        style={{ backgroundColor: palette.bgSubtle, borderColor: palette.border }}
+                        className="py-2 px-2 rounded-xl border text-xs font-bold text-center hover:opacity-85 cursor-pointer"
+                        title="ปรับขนาดให้พอดีหน้าจอ"
+                      >
+                        {Math.round(transform.scale * 100)}%
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => zoomBy(1.2)}
+                        style={{ backgroundColor: palette.bgSubtle, borderColor: palette.border }}
+                        className="p-2 rounded-xl border hover:opacity-85 cursor-pointer"
+                        title="ซูมเข้า"
+                      >
+                        <ZoomIn className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={fitToScreen}
+                        style={{ backgroundColor: palette.primarySoft, color: palette.primary, borderColor: palette.primary }}
+                        className="inline-flex items-center gap-1 px-2.5 py-2 rounded-xl border text-[11px] font-semibold hover:opacity-85 cursor-pointer"
+                        title="จัดกึ่งกลางพอดีจอ"
+                      >
+                        <Maximize2 className="w-3.5 h-3.5" />
+                        พอดีจอ
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 2. Card Style */}
+                  <div className="space-y-1.5 pt-2 border-t" style={{ borderColor: palette.border }}>
+                    <div style={{ color: palette.textMuted }} className="text-[11px] font-semibold">
+                      รูปแบบการ์ดสมาชิก
+                    </div>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      {CARD_STYLE_OPTIONS.map(({ id, label, title, icon: Icon }) => {
+                        const active = cardStyle === id;
+                        return (
+                          <button
+                            key={id}
+                            type="button"
+                            onClick={() => onChangeCardStyle(id)}
+                            title={title}
+                            style={
+                              active
+                                ? { backgroundColor: palette.primary, color: '#fff', borderColor: palette.primary }
+                                : { backgroundColor: palette.bgSubtle, borderColor: palette.border }
+                            }
+                            className="flex flex-col items-center justify-center gap-1 py-2 px-1.5 rounded-xl border text-[11px] font-semibold transition-colors cursor-pointer"
+                          >
+                            <Icon className="w-4 h-4" />
+                            <span>{label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* 3. Tree Orientation */}
+                  <div className="space-y-1.5 pt-2 border-t" style={{ borderColor: palette.border }}>
+                    <div style={{ color: palette.textMuted }} className="text-[11px] font-semibold">
+                      ทิศทางของแผนผัง
+                    </div>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      {ORIENTATION_OPTIONS.map(({ id, label, title, icon: Icon }) => {
+                        const active = orientation === id;
+                        return (
+                          <button
+                            key={id}
+                            type="button"
+                            onClick={() => onChangeOrientation(id)}
+                            title={title}
+                            style={
+                              active
+                                ? { backgroundColor: palette.accent, color: '#fff', borderColor: palette.accent }
+                                : { backgroundColor: palette.bgSubtle, borderColor: palette.border }
+                            }
+                            className="flex flex-col items-center justify-center gap-1 py-2 px-1.5 rounded-xl border text-[11px] font-semibold transition-colors cursor-pointer"
+                          >
+                            <Icon className="w-4 h-4" />
+                            <span>{label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* 4. Branch Collapse/Expand & Minimap */}
+                  <div className="space-y-1.5 pt-2 border-t" style={{ borderColor: palette.border }}>
+                    <div style={{ color: palette.textMuted }} className="text-[11px] font-semibold">
+                      การพับ-กางสาย & แผนที่ย่อ
+                    </div>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={onExpandAll}
+                        style={{ backgroundColor: palette.bgSubtle, borderColor: palette.border }}
+                        className="inline-flex items-center justify-center gap-1 py-2 px-2 rounded-xl border text-[11px] font-semibold hover:opacity-85 cursor-pointer"
+                        title="กางออกทุกสาย"
+                      >
+                        <Expand className="w-3.5 h-3.5" />
+                        กางหมด
+                      </button>
+                      <button
+                        type="button"
+                        onClick={onCollapseToLevel2}
+                        style={{ backgroundColor: palette.bgSubtle, borderColor: palette.border }}
+                        className="inline-flex items-center justify-center gap-1 py-2 px-2 rounded-xl border text-[11px] font-semibold hover:opacity-85 cursor-pointer"
+                        title="พับกิ่งรุ่นลูกหลาน"
+                      >
+                        <Shrink className="w-3.5 h-3.5" />
+                        พับกิ่ง
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowMinimap((m) => !m)}
+                        style={
+                          showMinimap
+                            ? { backgroundColor: palette.primarySoft, color: palette.primary, borderColor: palette.primary }
+                            : { backgroundColor: palette.bgSubtle, borderColor: palette.border }
+                        }
+                        className="inline-flex items-center justify-center gap-1 py-2 px-2 rounded-xl border text-[11px] font-semibold hover:opacity-85 cursor-pointer"
+                        title={showMinimap ? 'ซ่อนแผนที่ย่อ' : 'แสดงแผนที่ย่อ'}
+                      >
+                        <MapIcon className="w-3.5 h-3.5" />
+                        แผนที่
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={() => {
+                setShowViewMenu((v) => !v);
+                setShowFilterMenu(false);
+              }}
+              style={
+                showViewMenu
+                  ? { backgroundColor: palette.accent, color: '#fff', borderColor: palette.accent }
+                  : { backgroundColor: floatingBarBg, color: palette.textMain, borderColor: palette.border }
+              }
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border backdrop-blur-md shadow-md text-xs font-semibold hover:opacity-90 transition-all cursor-pointer"
+            >
+              <LayoutGrid className="w-3.5 h-3.5" />
+              <span>มุมมองการดู</span>
+              <span
+                style={
+                  showViewMenu
+                    ? { backgroundColor: 'rgba(255,255,255,0.25)', color: '#fff' }
+                    : { backgroundColor: palette.bgSubtle, color: palette.textMuted }
+                }
+                className="px-1.5 py-0.2 rounded-full text-[10px] font-bold"
+              >
+                {Math.round(transform.scale * 100)}%
+              </span>
+            </button>
           </div>
-        )}
+        </div>
 
         {/* Interactive Pan/Zoom Surface (supports mouse wheel + 1-finger pan + 2-finger mobile pinch-to-zoom!) */}
         <div
