@@ -149,15 +149,27 @@ function mergePersonRecord(base: Person | undefined, local: Person, remote: Pers
     gallery: mergeGallery(base?.gallery, local.gallery, remote.gallery),
   };
 
+  const isEmpty = (v: unknown) => v === undefined || v === null || (typeof v === 'string' && v.trim() === '');
+
   for (const key of SCALAR_PERSON_KEYS) {
     const bVal = base?.[key];
     const lVal = local[key];
     const rVal = remote[key];
     let chosen: unknown;
-    if (lVal === rVal) chosen = lVal;
-    else if (lVal !== bVal && rVal === bVal) chosen = lVal;
-    else if (rVal !== bVal && lVal === bVal) chosen = rVal;
-    else chosen = localNewer ? lVal : rVal;
+    if (lVal === rVal) {
+      chosen = lVal;
+    } else if (!base) {
+      // No common ancestor (e.g. recovering unsaved edits after refresh): always prefer non-empty / richer data!
+      if (!isEmpty(lVal) && isEmpty(rVal)) chosen = lVal;
+      else if (!isEmpty(rVal) && isEmpty(lVal)) chosen = rVal;
+      else chosen = localNewer ? lVal : rVal;
+    } else if (lVal !== bVal && rVal === bVal) {
+      chosen = lVal;
+    } else if (rVal !== bVal && lVal === bVal) {
+      chosen = rVal;
+    } else {
+      chosen = localNewer ? lVal : rVal;
+    }
 
     (merged as unknown as Record<string, unknown>)[key] = chosen;
   }

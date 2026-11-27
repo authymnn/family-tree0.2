@@ -92,6 +92,7 @@ import { ActivityNotification, NotificationCenter } from './components/Notificat
 
 const STORAGE_KEY = 'thai_family_tree_v1';
 const LOCAL_SAFETY_BACKUP_KEY = 'thai_family_tree_safety_backup_v1';
+const PENDING_SYNC_KEY = 'thai_family_tree_pending_sync_v1';
 const LOCAL_ACCESS_KEY = 'thai_family_tree_local_access_v1';
 const SESSION_PINS_KEY = 'thai_family_tree_session_pins_v1';
 const VIEW_PREFS_KEY = 'thai_family_tree_view_prefs_v1';
@@ -110,6 +111,23 @@ function loadNotifications(): ActivityNotification[] {
     // ignore
   }
   return [];
+}
+
+function loadHasPendingSync(): boolean {
+  try {
+    return localStorage.getItem(PENDING_SYNC_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function setPendingSyncFlag(pending: boolean): void {
+  try {
+    if (pending) localStorage.setItem(PENDING_SYNC_KEY, '1');
+    else localStorage.removeItem(PENDING_SYNC_KEY);
+  } catch {
+    // ignore
+  }
 }
 
 function loadNotificationsReadAt(): string {
@@ -249,9 +267,8 @@ export const App: React.FC = () => {
   const dataRef = useRef<FamilyTreeData>(data);
   dataRef.current = data;
   const lastSyncedBaseDataRef = useRef<FamilyTreeData | null>(null);
-  const hasUnsavedLocalChangesRef = useRef(false);
+  const hasUnsavedLocalChangesRef = useRef(loadHasPendingSync());
   const forceOverwriteCloudRef = useRef(false);
-  const suppressNextCloudSaveRef = useRef(false);
   const lastSavedStampRef = useRef<number>(0);
   const lastKnownRemoteStampRef = useRef<number>(0);
   const lastKnownRemoteIsoRef = useRef<string | null>(null);
@@ -448,7 +465,7 @@ export const App: React.FC = () => {
         const valid = validateImportedData(res.tree_data);
         if (valid) {
           if (hasUnsavedLocalChangesRef.current) {
-            // Merge incoming remote changes with unsaved local edits so neither side is lost
+            // Merge incoming remote changes with unsaved local edits (keeping richest data!)
             const { merged } = mergeFamilyTreeData(
               lastSyncedBaseDataRef.current,
               dataRef.current,
@@ -458,7 +475,6 @@ export const App: React.FC = () => {
             setData(merged);
           } else {
             lastSyncedBaseDataRef.current = valid;
-            suppressNextCloudSaveRef.current = true;
             setData(valid);
           }
         }
@@ -603,16 +619,24 @@ export const App: React.FC = () => {
     };
   }, [pullFromCloud, notifyRemoteActivity]);
 
-  // Debounced Auto-Save to Supabase Cloud with 3-way conflict-free merge (concurrent multi-user safe!)
+  // Warn before refreshing/closing tab if local edits are still syncing to Cloud
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (hasUnsavedLocalChangesRef.current && isSupabaseConfigured && access.canEdit) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [access.canEdit]);
+
+  // Fast Auto-Save to Supabase Cloud with 3-way conflict-free merge (runs ONLY when local edits are pending!)
   useEffect(() => {
     if (!isSupabaseConfigured) return;
     if (!cloudInitializedRef.current) return;
     if (!access.canEdit || access.viewLocked) return;
-
-    if (suppressNextCloudSaveRef.current) {
-      suppressNextCloudSaveRef.current = false;
-      return;
-    }
+    if (!hasUnsavedLocalChangesRef.current) return;
 
     if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
     setCloudStatus('saving');
@@ -686,8 +710,8 @@ export const App: React.FC = () => {
         lastSyncedBaseDataRef.current = dataToSave;
         if (dataRef.current === localSnapshot) {
           hasUnsavedLocalChangesRef.current = false;
+          setPendingSyncFlag(false);
           if (mergedWithRemote) {
-            suppressNextCloudSaveRef.current = true;
             setData(dataToSave);
             showToast('ผสานข้อมูลที่ญาติแก้พร้อมกันเรียบร้อย (ไม่ทับกัน)');
           }
@@ -697,9 +721,10 @@ export const App: React.FC = () => {
       } else {
         setCloudStatus('error');
         showToast(finalRes?.error || 'บันทึกขึ้น Cloud ไม่สำเร็จ', 'error');
+        // Note: keep hasUnsavedLocalChangesRef = true so pullFromCloud merges instead of wiping local edits!
         pullFromCloud(undefined, true);
       }
-    }, 350);
+    }, 120);
 
     return () => {
       if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
@@ -722,6 +747,7 @@ export const App: React.FC = () => {
       }
       pendingActivityRef.current = activityMessage;
       hasUnsavedLocalChangesRef.current = true;
+      setPendingSyncFlag(true);
       pushNotification(activityMessage, { isRemote: false });
       setData(nextData);
     },
@@ -913,8 +939,8 @@ export const App: React.FC = () => {
       }
       lastSyncedBaseDataRef.current = dataToSave;
       hasUnsavedLocalChangesRef.current = false;
+      setPendingSyncFlag(false);
       if (mergedWithRemote) {
-        suppressNextCloudSaveRef.current = true;
         setData(dataToSave);
       }
       setLastSyncedAt(res.updated_at);
@@ -1846,6 +1872,7 @@ export const App: React.FC = () => {
             const res = await restoreCloudTreeVersion(sessionPins.adminPin, historyId);
             if (!res.ok) return { ok: false, error: res.error };
             hasUnsavedLocalChangesRef.current = false;
+            setPendingSyncFlag(false);
             await pullFromCloud(undefined, true);
             showToast('กู้คืนข้อมูลย้อนหลังเรียบร้อยแล้ว!');
             return { ok: true };
