@@ -5,8 +5,6 @@ import {
   GitCompare,
   BarChart3,
   Search,
-  Undo2,
-  Redo2,
   Settings,
   UserPlus,
   CheckCircle2,
@@ -19,6 +17,7 @@ import {
   Lock,
   Cloud,
   Download,
+  Eye,
 } from 'lucide-react';
 import {
   CardStyle,
@@ -89,6 +88,7 @@ import { AdminAccessModal } from './components/AdminAccessModal';
 import { AccessGateScreen } from './components/AccessGateScreen';
 import { CoupleDetailModal } from './components/CoupleDetailModal';
 import { PersonAvatar } from './components/PersonAvatar';
+import { ActivityNotification, NotificationCenter } from './components/NotificationCenter';
 
 const STORAGE_KEY = 'thai_family_tree_v1';
 const LOCAL_SAFETY_BACKUP_KEY = 'thai_family_tree_safety_backup_v1';
@@ -96,7 +96,29 @@ const LOCAL_ACCESS_KEY = 'thai_family_tree_local_access_v1';
 const SESSION_PINS_KEY = 'thai_family_tree_session_pins_v1';
 const VIEW_PREFS_KEY = 'thai_family_tree_view_prefs_v1';
 const APPLIED_PRESET_KEY = 'thai_family_tree_applied_preset_at_v1';
-const MAX_HISTORY = 40;
+const NOTIFICATIONS_KEY = 'thai_family_tree_notifications_v1';
+const NOTIFICATIONS_READ_KEY = 'thai_family_tree_notifications_read_at_v1';
+
+function loadNotifications(): ActivityNotification[] {
+  try {
+    const raw = localStorage.getItem(NOTIFICATIONS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed.slice(0, 40);
+    }
+  } catch {
+    // ignore
+  }
+  return [];
+}
+
+function loadNotificationsReadAt(): string {
+  try {
+    return localStorage.getItem(NOTIFICATIONS_READ_KEY) || '';
+  } catch {
+    return '';
+  }
+}
 
 function loadViewPrefs(): { cardStyle: CardStyle; orientation: TreeOrientation } {
   try {
@@ -199,8 +221,9 @@ function computeLocalAccessState(
 
 export const App: React.FC = () => {
   const [data, setData] = useState<FamilyTreeData>(loadInitialData);
-  const [past, setPast] = useState<FamilyTreeData[]>([]);
-  const [future, setFuture] = useState<FamilyTreeData[]>([]);
+  const [onlineCount, setOnlineCount] = useState<number>(1);
+  const [notifications, setNotifications] = useState<ActivityNotification[]>(loadNotifications);
+  const [lastReadAt, setLastReadAt] = useState<string>(loadNotificationsReadAt);
 
   // Theme & Canvas Background state
   const [themeSettings, setThemeSettings] = useState<ThemeSettings>(loadSavedTheme);
@@ -451,27 +474,66 @@ export const App: React.FC = () => {
     [sessionPins, showToast, maybeApplySharedDisplayPreset]
   );
 
-  // Format user-friendly Realtime notification toast
-  const notifyRemoteActivity = useCallback(
-    (updatedBy?: string) => {
-      if (!updatedBy || updatedBy === 'family_member' || updatedBy === 'admin') {
-        showToast('ข้อมูลผังตระกูลได้รับการอัปเดตเรียลไทม์แล้ว');
-        return;
-      }
-      if (updatedBy === 'admin_access_change') {
-        showToast('แอดมินได้อัปเดตสิทธิ์การเข้าถึงของผังตระกูลแล้ว');
-        return;
-      }
-      if (updatedBy === 'admin_display_preset') {
-        showToast('แอดมินส่งรูปแบบการแสดงผลใหม่มาให้แล้ว');
-        return;
-      }
-      showToast(`${updatedBy} (ซิงก์เรียลไทม์)`);
+  const pushNotification = useCallback(
+    (message: string, opts?: { timestamp?: string; isRemote?: boolean; personId?: string }) => {
+      const clean = message.trim();
+      if (!clean) return;
+      const kind: ActivityNotification['kind'] = clean.includes('เพิ่มสมาชิก')
+        ? 'add'
+        : clean.includes('แอดมิน') || clean.includes('สิทธิ์') || clean.includes('รูปแบบ')
+          ? 'system'
+          : 'edit';
+      const entry: ActivityNotification = {
+        id: `ntf_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        message: clean,
+        timestamp: opts?.timestamp || new Date().toISOString(),
+        personId: opts?.personId,
+        kind,
+        isRemote: opts?.isRemote ?? false,
+      };
+      setNotifications((prev) => {
+        const next = [entry, ...prev].slice(0, 40);
+        try {
+          localStorage.setItem(NOTIFICATIONS_KEY, JSON.stringify(next));
+        } catch {
+          // ignore
+        }
+        return next;
+      });
     },
-    [showToast]
+    []
   );
 
-  // Initial Cloud Connect + Dual Realtime Subscription + Mobile Wake-Up + Smart 10s Fallback Poll
+  const handleMarkAllNotificationsRead = useCallback(() => {
+    const nowIso = new Date().toISOString();
+    setLastReadAt(nowIso);
+    try {
+      localStorage.setItem(NOTIFICATIONS_READ_KEY, nowIso);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  // Format user-friendly Realtime notification toast + store in top-right Notification Center
+  const notifyRemoteActivity = useCallback(
+    (updatedBy?: string, updatedAt?: string) => {
+      let displayMsg = 'ข้อมูลผังตระกูลได้รับการอัปเดตเรียลไทม์แล้ว';
+      if (updatedBy === 'admin_access_change') {
+        displayMsg = 'แอดมินได้อัปเดตสิทธิ์การเข้าถึงของผังตระกูลแล้ว';
+      } else if (updatedBy === 'admin_display_preset') {
+        displayMsg = 'แอดมินส่งรูปแบบการแสดงผลใหม่มาให้แล้ว';
+      } else if (updatedBy && updatedBy !== 'family_member' && updatedBy !== 'admin') {
+        displayMsg = updatedBy;
+      }
+      pushNotification(displayMsg, { timestamp: updatedAt, isRemote: true });
+      showToast(
+        displayMsg === updatedBy ? `${displayMsg} (ซิงก์เรียลไทม์)` : displayMsg
+      );
+    },
+    [showToast, pushNotification]
+  );
+
+  // Initial Cloud Connect + Dual Realtime Subscription + Live Online Presence + Smart 10s Fallback Poll
   useEffect(() => {
     if (!isSupabaseConfigured) return;
     pullFromCloud(undefined, true);
@@ -496,12 +558,16 @@ export const App: React.FC = () => {
 
       pullFromCloud(undefined, true).then((res) => {
         if (res?.ok) {
-          notifyRemoteActivity(ping.updated_by || res.updated_by);
+          notifyRemoteActivity(ping.updated_by || res.updated_by, ping.updated_at || res.updated_at);
         }
       });
     };
 
-    const unsubscribe = subscribeToCloudSync(handleIncomingSync, setRealtimeConnected);
+    const unsubscribe = subscribeToCloudSync(
+      handleIncomingSync,
+      setRealtimeConnected,
+      setOnlineCount
+    );
 
     // Lightweight check when returning to the tab or waking up mobile phone
     const checkLatestStatus = async () => {
@@ -656,64 +722,11 @@ export const App: React.FC = () => {
       }
       pendingActivityRef.current = activityMessage;
       hasUnsavedLocalChangesRef.current = true;
-      setData((prev) => {
-        setPast((p) => [...p.slice(-(MAX_HISTORY - 1)), prev]);
-        setFuture([]);
-        return nextData;
-      });
+      pushNotification(activityMessage, { isRemote: false });
+      setData(nextData);
     },
-    [access.canEdit, showToast]
+    [access.canEdit, showToast, pushNotification]
   );
-
-  const handleUndo = useCallback(() => {
-    if (!access.canEdit) return;
-    setPast((prevPast) => {
-      if (prevPast.length === 0) return prevPast;
-      const previous = prevPast[prevPast.length - 1];
-      hasUnsavedLocalChangesRef.current = true;
-      pendingActivityRef.current = 'ย้อนกลับการแก้ไขล่าสุด';
-      setFuture((f) => [data, ...f]);
-      setData(previous);
-      showToast('ย้อนกลับการแก้ไขล่าสุดแล้ว');
-      return prevPast.slice(0, -1);
-    });
-  }, [access.canEdit, data, showToast]);
-
-  const handleRedo = useCallback(() => {
-    if (!access.canEdit) return;
-    setFuture((prevFuture) => {
-      if (prevFuture.length === 0) return prevFuture;
-      const next = prevFuture[0];
-      hasUnsavedLocalChangesRef.current = true;
-      pendingActivityRef.current = 'ทำซ้ำการแก้ไข';
-      setPast((p) => [...p, data]);
-      setData(next);
-      showToast('ทำซ้ำการแก้ไขแล้ว');
-      return prevFuture.slice(1);
-    });
-  }, [access.canEdit, data, showToast]);
-
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement;
-      const inInput =
-        target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
-      if (inInput || simpleMode || !access.canEdit) return;
-
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) {
-        e.preventDefault();
-        handleUndo();
-      } else if (
-        ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') ||
-        ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'z')
-      ) {
-        e.preventDefault();
-        handleRedo();
-      }
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [handleUndo, handleRedo, simpleMode, access.canEdit]);
 
   // Admin & Gate Handlers
   const handleUnlockViewGate = async (pin: string, asAdmin: boolean) => {
@@ -1152,6 +1165,35 @@ export const App: React.FC = () => {
     setTimeout(() => treeCanvasRef.current?.fitToScreen(), 80);
   };
 
+  const memberCount = Object.keys(data.members).length;
+
+  // IMPORTANT: All hooks (useMemo, useEffect, etc.) must stay ABOVE any early returns!
+  const currentDisplaySummary = useMemo(() => {
+    const styleLabel =
+      cardStyle === 'photo-only'
+        ? 'รูป+ชื่อ'
+        : cardStyle === 'compact'
+          ? 'กะทัดรัด'
+          : 'ละเอียด';
+    const orientLabel =
+      orientation === 'left-right'
+        ? 'แนวตั้ง'
+        : orientation === 'bottom-up'
+          ? 'ล่าง→บน'
+          : 'บน→ล่าง';
+    const bgLabel =
+      themeSettings.bgType === 'tree'
+        ? 'พื้นหลังต้นไม้'
+        : themeSettings.bgType === 'house'
+          ? 'พื้นหลังบ้าน'
+          : themeSettings.bgType === 'botanical'
+            ? 'สีน้ำพฤกษา'
+            : themeSettings.bgType === 'custom'
+              ? 'รูปพื้นหลังเอง'
+              : 'ลายจุด';
+    return `ธีม${palette.name} · ${bgLabel} · การ์ด${styleLabel} · ${orientLabel}`;
+  }, [palette.name, themeSettings.bgType, cardStyle, orientation]);
+
   // If Admin locked View Access with PIN, show the Family Access Gate screen
   if (access.viewLocked) {
     return (
@@ -1178,34 +1220,6 @@ export const App: React.FC = () => {
       />
     );
   }
-
-  const memberCount = Object.keys(data.members).length;
-
-  const currentDisplaySummary = useMemo(() => {
-    const styleLabel =
-      cardStyle === 'photo-only'
-        ? 'รูป+ชื่อ'
-        : cardStyle === 'compact'
-          ? 'กะทัดรัด'
-          : 'ละเอียด';
-    const orientLabel =
-      orientation === 'left-right'
-        ? 'แนวตั้ง'
-        : orientation === 'bottom-up'
-          ? 'ล่าง→บน'
-          : 'บน→ล่าง';
-    const bgLabel =
-      themeSettings.bgType === 'tree'
-        ? 'พื้นหลังต้นไม้'
-        : themeSettings.bgType === 'house'
-          ? 'พื้นหลังบ้าน'
-          : themeSettings.bgType === 'botanical'
-            ? 'สีน้ำพฤกษา'
-            : themeSettings.bgType === 'custom'
-              ? 'รูปพื้นหลังเอง'
-              : 'ลายจุด';
-    return `ธีม${palette.name} · ${bgLabel} · การ์ด${styleLabel} · ${orientLabel}`;
-  }, [palette.name, themeSettings.bgType, cardStyle, orientation]);
 
   return (
     <div className="h-screen w-screen flex flex-col overflow-hidden theme-app-bg">
@@ -1234,28 +1248,45 @@ export const App: React.FC = () => {
               <div className="text-sm sm:text-base font-bold font-serif-thai truncate leading-tight">
                 {data.clanName}
               </div>
-              <div className="text-[11px] theme-muted-text hidden sm:flex items-center gap-1.5">
-                <span>
+              <div className="text-[11px] theme-muted-text flex items-center gap-1.5">
+                <span className="hidden sm:inline">
                   {memberCount} สมาชิก · {fullLayoutForMeta.maxGeneration} รุ่น
                 </span>
-                <span>·</span>
+                <span className="hidden sm:inline">·</span>
                 {isSupabaseConfigured ? (
-                  <span className="inline-flex items-center gap-1" style={{ color: palette.primary }}>
-                    {realtimeConnected && cloudStatus === 'synced' ? (
-                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                    ) : (
-                      <Cloud className="w-3 h-3" />
+                  <span className="inline-flex items-center gap-1.5" style={{ color: palette.primary }}>
+                    <span className="inline-flex items-center gap-1">
+                      {realtimeConnected && cloudStatus === 'synced' ? (
+                        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                      ) : (
+                        <Cloud className="w-3 h-3" />
+                      )}
+                      <span className="hidden sm:inline">
+                        {cloudStatus === 'saving'
+                          ? 'กำลังซิงก์...'
+                          : cloudStatus === 'synced'
+                            ? realtimeConnected
+                              ? 'เรียลไทม์'
+                              : 'ซิงก์แล้ว'
+                            : 'เชื่อมต่อ...'}
+                      </span>
+                    </span>
+                    {realtimeConnected && (
+                      <span
+                        title={`กำลังมีคนเปิดดูผังตระกูลอยู่ ${onlineCount} เครื่องในขณะนี้`}
+                        style={{
+                          backgroundColor: palette.primarySoft,
+                          color: palette.primary,
+                        }}
+                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold"
+                      >
+                        <Eye className="w-2.5 h-2.5" />
+                        <span>กำลังดู {onlineCount} คน</span>
+                      </span>
                     )}
-                    {cloudStatus === 'saving'
-                      ? 'กำลังซิงก์...'
-                      : cloudStatus === 'synced'
-                        ? realtimeConnected
-                          ? 'ซิงก์เรียลไทม์'
-                          : 'Cloud ซิงก์แล้ว'
-                        : 'กำลังเชื่อมต่อ'}
                   </span>
                 ) : (
-                  <span>บันทึกในเครื่อง</span>
+                  <span className="hidden sm:inline">บันทึกในเครื่อง</span>
                 )}
               </div>
             </div>
@@ -1420,27 +1451,15 @@ export const App: React.FC = () => {
             <span className="hidden xl:inline">ส่งออก/ชีต</span>
           </button>
 
-          {/* Undo / Redo (only when canEdit) */}
-          {access.canEdit && (
-            <div className="hidden sm:flex items-center border rounded-xl theme-subtle p-0.5">
-              <button
-                onClick={handleUndo}
-                disabled={past.length === 0}
-                title="ย้อนกลับ (Ctrl+Z)"
-                className="p-1.5 rounded-lg hover:bg-black/5 disabled:opacity-35 disabled:cursor-not-allowed transition-colors cursor-pointer"
-              >
-                <Undo2 className="w-3.5 h-3.5" />
-              </button>
-              <button
-                onClick={handleRedo}
-                disabled={future.length === 0}
-                title="ทำซ้ำ (Ctrl+Y)"
-                className="p-1.5 rounded-lg hover:bg-black/5 disabled:opacity-35 disabled:cursor-not-allowed transition-colors cursor-pointer"
-              >
-                <Redo2 className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          )}
+          {/* Facebook-style Activity Notification Bell & History Popup */}
+          <NotificationCenter
+            data={data}
+            notifications={notifications}
+            lastReadAt={lastReadAt}
+            palette={palette}
+            onMarkAllRead={handleMarkAllNotificationsRead}
+            onSelectPerson={(id) => jumpToPersonOnTree(id)}
+          />
 
           {access.canEdit && (
             <button

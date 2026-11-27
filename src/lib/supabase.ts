@@ -309,7 +309,8 @@ export function subscribeToCloudSync(
     client_id?: string;
     source: 'broadcast' | 'postgres';
   }) => void,
-  onRealtimeStateChange?: (connected: boolean) => void
+  onRealtimeStateChange?: (connected: boolean) => void,
+  onOnlineCountChange?: (count: number) => void
 ): () => void {
   if (!supabase) return () => {};
 
@@ -317,7 +318,13 @@ export function subscribeToCloudSync(
     .channel(`family_tree_live_${FAMILY_TREE_ID}`, {
       config: {
         broadcast: { self: false },
+        presence: { key: CLIENT_INSTANCE_ID },
       },
+    })
+    .on('presence', { event: 'sync' }, () => {
+      const state = channel.presenceState();
+      const count = Object.keys(state).length;
+      onOnlineCountChange?.(Math.max(1, count));
     })
     .on('broadcast', { event: 'tree_updated' }, ({ payload }) => {
       const p = payload as { updated_at?: string; updated_by?: string; client_id?: string } | undefined;
@@ -347,7 +354,15 @@ export function subscribeToCloudSync(
       }
     )
     .subscribe((status) => {
-      onRealtimeStateChange?.(status === 'SUBSCRIBED');
+      const isConnected = status === 'SUBSCRIBED';
+      onRealtimeStateChange?.(isConnected);
+      if (isConnected) {
+        channel
+          .track({ online_at: new Date().toISOString() })
+          .catch(() => {
+            // ignore transient presence track failures
+          });
+      }
     });
 
   activeSyncChannel = channel;
