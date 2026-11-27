@@ -1538,6 +1538,44 @@ export const App: React.FC = () => {
             ref={treeCanvasRef}
             data={data}
             selectedPersonId={activeSelectedPersonId}
+            previewPersonId={previewPerson?.id ?? null}
+            previewPopover={
+              previewPerson ? (
+                <PersonPreviewModal
+                  data={data}
+                  person={previewPerson}
+                  generation={fullLayoutForMeta.generationMap[previewPerson.id]}
+                  palette={palette}
+                  canEdit={access.canEdit}
+                  isLineageHighlighted={lineageAnchorId === previewPerson.id}
+                  anchored={true}
+                  onClose={() => setPreviewPersonId(null)}
+                  onOpenFullEditor={(id) => openPersonEditor(id)}
+                  onSelectPerson={(id) => {
+                    openPersonPreview(id);
+                    treeCanvasRef.current?.focusPerson(id);
+                  }}
+                  onOpenCoupleDetail={(personAId, personBId) => {
+                    setPreviewPersonId(null);
+                    setCoupleModalState({ personAId, personBId });
+                  }}
+                  onQuickAdd={(anchorId, relation) => {
+                    setPreviewPersonId(null);
+                    setQuickAddState({ anchorId, relation });
+                  }}
+                  onToggleLineageHighlight={(id) => {
+                    setCustomHighlight(null);
+                    setLineageAnchorId((prev) => (prev === id ? null : id));
+                    setPreviewPersonId(null);
+                  }}
+                  onFocusSubtree={(id) => {
+                    setFocusRootId(id);
+                    setCollapsedIds(new Set());
+                    setPreviewPersonId(null);
+                  }}
+                />
+              ) : null
+            }
             highlightIds={activeHighlight?.ids ?? null}
             highlightLabel={activeHighlight?.label ?? null}
             onClearHighlight={() => {
@@ -1545,6 +1583,10 @@ export const App: React.FC = () => {
               setCustomHighlight(null);
             }}
             focusRootId={focusRootId}
+            onFocusSubtree={(id) => {
+              setFocusRootId(id);
+              setCollapsedIds(new Set());
+            }}
             onClearFocusRoot={() => setFocusRootId(null)}
             cardStyle={cardStyle}
             onChangeCardStyle={setCardStyle}
@@ -1684,8 +1726,8 @@ export const App: React.FC = () => {
         )}
       </main>
 
-      {/* Compact Person Detail Preview Popup (opens first when clicking any member) */}
-      {previewPerson && (
+      {/* Compact Person Detail Preview Modal (centered only when NOT on tree view; on tree view it attaches beside the card!) */}
+      {previewPerson && view !== 'tree' && (
         <PersonPreviewModal
           data={data}
           person={previewPerson}
@@ -1697,9 +1739,6 @@ export const App: React.FC = () => {
           onOpenFullEditor={(id) => openPersonEditor(id)}
           onSelectPerson={(id) => {
             openPersonPreview(id);
-            if (view === 'tree') {
-              treeCanvasRef.current?.focusPerson(id);
-            }
           }}
           onOpenCoupleDetail={(personAId, personBId) => {
             setPreviewPersonId(null);
@@ -1713,7 +1752,7 @@ export const App: React.FC = () => {
             setCustomHighlight(null);
             setLineageAnchorId((prev) => (prev === id ? null : id));
             setPreviewPersonId(null);
-            if (view !== 'tree') setView('tree');
+            setView('tree');
           }}
           onFocusSubtree={(id) => {
             setFocusRootId(id);

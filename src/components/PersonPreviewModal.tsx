@@ -40,6 +40,7 @@ interface PersonPreviewModalProps {
   palette: ThemePalette;
   canEdit: boolean;
   isLineageHighlighted: boolean;
+  anchored?: boolean;
   onClose: () => void;
   onOpenFullEditor: (personId: string) => void;
   onSelectPerson: (personId: string) => void;
@@ -56,6 +57,7 @@ export const PersonPreviewModal: React.FC<PersonPreviewModalProps> = ({
   palette,
   canEdit,
   isLineageHighlighted,
+  anchored = false,
   onClose,
   onOpenFullEditor,
   onSelectPerson,
@@ -74,20 +76,22 @@ export const PersonPreviewModal: React.FC<PersonPreviewModalProps> = ({
   const age = calculateAge(person.birthDate, person.deathDate, person.isDeceased);
   const gallery = person.gallery ?? [];
 
-  return (
+  const cardContent = (
     <div
-      className="fixed inset-0 z-40 bg-black/40 backdrop-blur-[1.5px] flex items-center justify-center p-3 sm:p-4"
-      onClick={onClose}
+      data-card-interactive="true"
+      style={{
+        backgroundColor: palette.bgSurface,
+        borderColor: palette.border,
+        color: palette.textMain,
+      }}
+      className={
+        anchored
+          ? 'w-[310px] sm:w-[356px] max-w-[calc(100vw-20px)] max-h-[68vh] rounded-2xl shadow-2xl border overflow-hidden flex flex-col animate-fade-in'
+          : 'w-full max-w-md max-h-[88vh] rounded-3xl shadow-2xl border overflow-hidden flex flex-col animate-fade-in'
+      }
+      onClick={(e) => e.stopPropagation()}
+      onWheel={(e) => e.stopPropagation()}
     >
-      <div
-        style={{
-          backgroundColor: palette.bgSurface,
-          borderColor: palette.border,
-          color: palette.textMain,
-        }}
-        className="w-full max-w-md max-h-[88vh] rounded-3xl shadow-2xl border overflow-hidden flex flex-col animate-fade-in"
-        onClick={(e) => e.stopPropagation()}
-      >
         {/* Compact Header */}
         <div
           style={{ backgroundColor: palette.bgSubtle, borderColor: palette.border }}
@@ -210,10 +214,29 @@ export const PersonPreviewModal: React.FC<PersonPreviewModalProps> = ({
                 <span>{person.occupation}</span>
               </div>
             )}
-            {person.education && (
-              <div className="flex items-center gap-2.5">
-                <GraduationCap className="w-3.5 h-3.5 shrink-0" style={{ color: palette.primary }} />
-                <span>{person.education}</span>
+            {(person.education || person.educationStatus || person.graduatedFrom) && (
+              <div className="flex items-start gap-2.5">
+                <GraduationCap className="w-3.5 h-3.5 shrink-0 mt-0.5" style={{ color: palette.primary }} />
+                <div className="space-y-0.5 min-w-0">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    {person.educationStatus === 'studying' && (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-100 text-sky-800">
+                        กำลังศึกษาอยู่
+                      </span>
+                    )}
+                    {person.educationStatus === 'graduated' && (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+                        เรียนจบแล้ว
+                      </span>
+                    )}
+                    {person.education && <span>{person.education}</span>}
+                  </div>
+                  {person.graduatedFrom && (
+                    <div style={{ color: palette.textMuted }} className="text-[11px] whitespace-pre-wrap">
+                      จบจาก: {person.graduatedFrom}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
             {person.phone && (
@@ -477,33 +500,50 @@ export const PersonPreviewModal: React.FC<PersonPreviewModalProps> = ({
           )}
         </div>
       </div>
+  );
 
-      {/* Lightbox */}
-      {lightboxPhoto && (
-        <div
-          className="fixed inset-0 z-[70] bg-black/85 flex flex-col items-center justify-center p-4"
-          onClick={() => setLightboxPhoto(null)}
-        >
-          <button
-            type="button"
-            onClick={() => setLightboxPhoto(null)}
-            className="absolute top-4 right-4 p-2 rounded-full bg-white/15 text-white hover:bg-white/25 cursor-pointer"
-          >
-            <X className="w-6 h-6" />
-          </button>
-          <img
-            src={lightboxPhoto.url}
-            alt={lightboxPhoto.caption || ''}
-            className="max-w-full max-h-[82vh] rounded-2xl shadow-2xl object-contain"
-            onClick={(e) => e.stopPropagation()}
-          />
-          {lightboxPhoto.caption && (
-            <div className="mt-3 px-4 py-1.5 rounded-full bg-white/15 text-white text-xs">
-              {lightboxPhoto.caption}
-            </div>
-          )}
+  const lightbox = lightboxPhoto ? (
+    <div
+      className="fixed inset-0 z-[70] bg-black/85 flex flex-col items-center justify-center p-4"
+      onClick={() => setLightboxPhoto(null)}
+    >
+      <button
+        type="button"
+        onClick={() => setLightboxPhoto(null)}
+        className="absolute top-4 right-4 p-2 rounded-full bg-white/15 text-white hover:bg-white/25 cursor-pointer"
+      >
+        <X className="w-6 h-6" />
+      </button>
+      <img
+        src={lightboxPhoto.url}
+        alt={lightboxPhoto.caption || ''}
+        className="max-w-full max-h-[82vh] rounded-2xl shadow-2xl object-contain"
+        onClick={(e) => e.stopPropagation()}
+      />
+      {lightboxPhoto.caption && (
+        <div className="mt-3 px-4 py-1.5 rounded-full bg-white/15 text-white text-xs">
+          {lightboxPhoto.caption}
         </div>
       )}
+    </div>
+  ) : null;
+
+  if (anchored) {
+    return (
+      <>
+        {cardContent}
+        {lightbox}
+      </>
+    );
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-40 bg-black/40 backdrop-blur-[1.5px] flex items-center justify-center p-3 sm:p-4"
+      onClick={onClose}
+    >
+      {cardContent}
+      {lightbox}
     </div>
   );
 };

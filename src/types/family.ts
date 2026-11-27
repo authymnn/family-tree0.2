@@ -1,5 +1,7 @@
 export type Gender = 'male' | 'female' | 'other';
 
+export type EducationStatus = 'studying' | 'graduated' | 'none';
+
 export type SpouseStatus = 'married' | 'divorced' | 'widowed' | 'partner';
 
 export interface SpouseLink {
@@ -35,7 +37,9 @@ export interface Person {
   isDeceased: boolean;
   deathDate?: string;      // YYYY-MM-DD or YYYY
   occupation?: string;     // อาชีพ / ตำแหน่ง
-  education?: string;      // การศึกษา
+  educationStatus?: EducationStatus; // สถานะการศึกษา: กำลังศึกษา / เรียนจบแล้ว
+  education?: string;      // การศึกษาปัจจุบัน / วุฒิหลัก
+  graduatedFrom?: string;  // เรียนจบจากที่ไหนบ้าง (ใส่ได้หลายสถาบัน)
   phone?: string;          // เบอร์โทรศัพท์
   lineId?: string;         // Line ID
   address?: string;        // ที่อยู่ปัจจุบัน / จังหวัด

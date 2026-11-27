@@ -228,7 +228,12 @@ export const PersonDrawer: React.FC<PersonDrawerProps> = ({
       birthPlace: draft.birthPlace?.trim() || undefined,
       deathDate: draft.isDeceased ? draft.deathDate?.trim() || undefined : undefined,
       occupation: draft.occupation?.trim() || undefined,
+      educationStatus:
+        draft.educationStatus && draft.educationStatus !== 'none'
+          ? draft.educationStatus
+          : undefined,
       education: draft.education?.trim() || undefined,
+      graduatedFrom: draft.graduatedFrom?.trim() || undefined,
       phone: draft.phone?.trim() || undefined,
       lineId: draft.lineId?.trim() || undefined,
       address: draft.address?.trim() || undefined,
@@ -516,25 +521,101 @@ export const PersonDrawer: React.FC<PersonDrawerProps> = ({
             <h4 className="text-xs font-semibold uppercase tracking-wide theme-muted-text">
               อาชีพ การติดต่อ และหมายเหตุ
             </h4>
-            <div className="grid grid-cols-2 gap-2.5">
-              <div>
-                <label className="block text-[11px] font-medium theme-muted-text mb-1">อาชีพ</label>
-                <input
-                  type="text"
-                  value={draft.occupation || ''}
-                  onChange={(e) => setDraft({ ...draft, occupation: e.target.value })}
-                  style={{ borderColor: 'var(--theme-border)', backgroundColor: 'var(--theme-bg-surface)' }}
-                  className="w-full px-2.5 py-1.5 text-sm rounded-xl border focus:outline-none"
-                />
+            <div>
+              <label className="block text-[11px] font-medium theme-muted-text mb-1">อาชีพ</label>
+              <input
+                type="text"
+                value={draft.occupation || ''}
+                onChange={(e) => setDraft({ ...draft, occupation: e.target.value })}
+                placeholder="เช่น ครู, ธุรกิจส่วนตัว, ทำงานอยู่กรุงเทพ..."
+                style={{ borderColor: 'var(--theme-border)', backgroundColor: 'var(--theme-bg-surface)' }}
+                className="w-full px-2.5 py-1.5 text-sm rounded-xl border focus:outline-none"
+              />
+            </div>
+
+            {/* Education Status + Current Education + Graduated From */}
+            <div
+              style={{ borderColor: 'var(--theme-border)', backgroundColor: 'var(--theme-bg-subtle)' }}
+              className="p-3 rounded-xl border space-y-2.5"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <label className="flex items-center gap-1.5 text-[11px] font-semibold theme-muted-text">
+                  <GraduationCap className="w-3.5 h-3.5" />
+                  สถานะการศึกษา
+                </label>
               </div>
+              <div className="grid grid-cols-3 gap-1.5">
+                {(
+                  [
+                    { id: 'studying', label: 'กำลังศึกษาอยู่' },
+                    { id: 'graduated', label: 'เรียนจบแล้ว' },
+                    { id: 'none', label: 'ไม่ระบุ' },
+                  ] as const
+                ).map(({ id, label }) => {
+                  const active = (draft.educationStatus || 'none') === id;
+                  return (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() =>
+                        setDraft({
+                          ...draft,
+                          educationStatus: id === 'none' ? undefined : id,
+                        })
+                      }
+                      style={
+                        active
+                          ? {
+                              backgroundColor: 'var(--theme-primary)',
+                              color: '#fff',
+                              borderColor: 'var(--theme-primary)',
+                            }
+                          : {
+                              backgroundColor: 'var(--theme-bg-surface)',
+                              borderColor: 'var(--theme-border)',
+                            }
+                      }
+                      className="py-1.5 px-2 rounded-lg border text-[11px] font-semibold transition-colors cursor-pointer text-center"
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+
               <div>
-                <label className="block text-[11px] font-medium theme-muted-text mb-1">การศึกษา</label>
+                <label className="block text-[11px] font-medium theme-muted-text mb-1">
+                  {draft.educationStatus === 'studying'
+                    ? 'กำลังเรียนอยู่ระดับ / สถาบัน'
+                    : draft.educationStatus === 'graduated'
+                      ? 'วุฒิการศึกษาหลัก / สาขา'
+                      : 'การศึกษา'}
+                </label>
                 <input
                   type="text"
                   value={draft.education || ''}
                   onChange={(e) => setDraft({ ...draft, education: e.target.value })}
+                  placeholder={
+                    draft.educationStatus === 'studying'
+                      ? 'เช่น ปี 2 มฟน., ม.4 อิสลาฮียะห์, ป.5...'
+                      : 'เช่น ปริญญาตรี อิสลามศึกษา มฟน.'
+                  }
                   style={{ borderColor: 'var(--theme-border)', backgroundColor: 'var(--theme-bg-surface)' }}
                   className="w-full px-2.5 py-1.5 text-sm rounded-xl border focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-medium theme-muted-text mb-1">
+                  เรียนจบจากที่ไหนบ้าง (ใส่ได้หลายสถาบัน)
+                </label>
+                <textarea
+                  rows={2}
+                  value={draft.graduatedFrom || ''}
+                  onChange={(e) => setDraft({ ...draft, graduatedFrom: e.target.value })}
+                  placeholder="เช่น รร.บ้านบาจุ, รร.อิสลาฮียะห์ ยะลา, มหาวิทยาลัยฟาฏอนี..."
+                  style={{ borderColor: 'var(--theme-border)', backgroundColor: 'var(--theme-bg-surface)' }}
+                  className="w-full px-2.5 py-1.5 text-xs rounded-xl border focus:outline-none resize-y"
                 />
               </div>
             </div>
@@ -1082,12 +1163,29 @@ export const PersonDrawer: React.FC<PersonDrawerProps> = ({
               </div>
             )}
 
-            {person.education && (
+            {(person.education || person.educationStatus || person.graduatedFrom) && (
               <div className="flex items-start gap-2.5">
                 <GraduationCap className="w-4 h-4 theme-muted-text mt-0.5 shrink-0" />
-                <div>
-                  <div className="text-[11px] theme-muted-text">การศึกษา</div>
-                  <div className="text-xs">{person.education}</div>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-[11px] theme-muted-text">การศึกษา</span>
+                    {person.educationStatus === 'studying' && (
+                      <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-sky-100 text-sky-800">
+                        กำลังศึกษาอยู่
+                      </span>
+                    )}
+                    {person.educationStatus === 'graduated' && (
+                      <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+                        เรียนจบแล้ว
+                      </span>
+                    )}
+                  </div>
+                  {person.education && <div className="text-xs font-medium">{person.education}</div>}
+                  {person.graduatedFrom && (
+                    <div className="text-[11.5px] theme-muted-text whitespace-pre-wrap">
+                      จบจาก: {person.graduatedFrom}
+                    </div>
+                  )}
                 </div>
               </div>
             )}

@@ -25,10 +25,16 @@ import {
   LayoutGrid,
   UserCircle2,
   List,
+  SlidersHorizontal,
+  Home,
+  GraduationCap,
+  Check,
+  Crosshair,
 } from 'lucide-react';
 import {
   CardStyle,
   FamilyTreeData,
+  Person,
   QuickAddRelation,
   ThemeSettings,
   TreeOrientation,
@@ -53,10 +59,13 @@ export interface TreeCanvasHandle {
 interface TreeCanvasProps {
   data: FamilyTreeData;
   selectedPersonId: string | null;
+  previewPersonId?: string | null;
+  previewPopover?: React.ReactNode;
   highlightIds: Set<string> | null;
   highlightLabel?: string | null;
   onClearHighlight?: () => void;
   focusRootId: string | null;
+  onFocusSubtree?: (personId: string) => void;
   onClearFocusRoot: () => void;
   cardStyle: CardStyle;
   onChangeCardStyle: (style: CardStyle) => void;
@@ -74,6 +83,48 @@ interface TreeCanvasProps {
   themeSettings: ThemeSettings;
   palette: ThemePalette;
   readOnly?: boolean;
+}
+
+function collectHouseMemberIds(
+  members: Record<string, Person>,
+  rootPersonId: string
+): Set<string> {
+  const result = new Set<string>();
+  const root = members[rootPersonId];
+  if (!root) return result;
+  const queue: string[] = [rootPersonId];
+  result.add(rootPersonId);
+  for (const sp of root.spouses) {
+    if (members[sp.spouseId]) {
+      result.add(sp.spouseId);
+      queue.push(sp.spouseId);
+    }
+  }
+  const all = Object.values(members);
+  while (queue.length > 0) {
+    const curr = queue.shift()!;
+    for (const m of all) {
+      if (!result.has(m.id) && m.parentIds.includes(curr)) {
+        result.add(m.id);
+        queue.push(m.id);
+        for (const sp of m.spouses) {
+          if (members[sp.spouseId] && !result.has(sp.spouseId)) {
+            result.add(sp.spouseId);
+            queue.push(sp.spouseId);
+          }
+        }
+      }
+    }
+  }
+  return result;
+}
+
+function isPersonStudying(p: Person): boolean {
+  if (p.educationStatus === 'studying') return true;
+  if (p.educationStatus === 'graduated') return false;
+  const edu = (p.education || '').trim();
+  if (!edu) return false;
+  return /^(ป\.|ม\.|อ\.|ปี\s*\d|grade|ศพด|สพด|น\.ร)/i.test(edu);
 }
 
 const CARD_STYLE_OPTIONS: Array<{
@@ -103,10 +154,13 @@ export const TreeCanvas = React.forwardRef<TreeCanvasHandle, TreeCanvasProps>(
     {
       data,
       selectedPersonId,
+      previewPersonId = null,
+      previewPopover = null,
       highlightIds,
       highlightLabel,
       onClearHighlight,
       focusRootId,
+      onFocusSubtree,
       onClearFocusRoot,
       cardStyle,
       onChangeCardStyle,
@@ -148,6 +202,13 @@ export const TreeCanvas = React.forwardRef<TreeCanvasHandle, TreeCanvasProps>(
     const didDragRef = useRef(false);
 
     const [branchFilter, setBranchFilter] = useState<string>('ALL');
+    const [showFilterMenu, setShowFilterMenu] = useState(false);
+    const [selectedGens, setSelectedGens] = useState<Set<number>>(() => new Set());
+    const [selectedHouseIds, setSelectedHouseIds] = useState<Set<string>>(() => new Set());
+    const [lifeFilter, setLifeFilter] = useState<'all' | 'living' | 'deceased'>('all');
+    const [eduFilter, setEduFilter] = useState<'all' | 'studying' | 'graduated' | 'working'>('all');
+    const [genderFilter, setGenderFilter] = useState<'all' | 'male' | 'female'>('all');
+    const [photoFilter, setPhotoFilter] = useState<'all' | 'has-photo' | 'no-photo'>('all');
     const [hasInitialFit, setHasInitialFit] = useState(false);
     const [showMinimap, setShowMinimap] = useState(true);
 
@@ -400,15 +461,124 @@ export const TreeCanvas = React.forwardRef<TreeCanvasHandle, TreeCanvasProps>(
       }));
     };
 
+    // Build selectable household list (Gen-2 children / main houses with spouse or children)
+    const houseOptions = useMemo(() => {
+      const houses: Array<{
+        rootId: string;
+        label: string;
+        color: string;
+        memberIds: Set<string>;
+      }> = [];
+      const seen = new Set<string>();
+      const gen2Cards = layout.cards
+        .filter((c) => c.generation === 2 && !c.isSpouseInUnit)
+        .sort((a, b) => (a.person.birthOrder ?? 99) - (b.person.birthOrder ?? 99));
+
+      for (const c of gen2Cards) {
+        if (seen.has(c.person.id)) continue;
+        seen.add(c.person.id);
+        const firstSpouseId = c.person.spouses[0]?.spouseId;
+        const spouse = firstSpouseId ? data.members[firstSpouseId] : undefined;
+        const spLink = c.person.spouses[0];
+        const label =
+          spLink?.familyName?.trim() ||
+          (spouse
+            ? `บ้าน${c.person.firstName}${c.person.nickname ? ` (${c.person.nickname})` : ''}`
+            : `สาย${c.person.firstName}${c.person.nickname ? ` (${c.person.nickname})` : ''}`);
+        const color = spouse
+          ? getCoupleColor(c.person.id, spouse.id, spLink?.color)
+          : getMemberFamilyColor(data.members, c.person.id);
+        const memberIds = collectHouseMemberIds(data.members, c.person.id);
+        houses.push({ rootId: c.person.id, label, color, memberIds });
+      }
+      return houses;
+    }, [layout.cards, data.members]);
+
+    const generationCounts = useMemo(() => {
+      const counts = new Map<number, number>();
+      for (const c of layout.cards) {
+        counts.set(c.generation, (counts.get(c.generation) || 0) + 1);
+      }
+      return Array.from(counts.entries()).sort((a, b) => a[0] - b[0]);
+    }, [layout.cards]);
+
+    const hasCustomFilter =
+      branchFilter !== 'ALL' ||
+      selectedGens.size > 0 ||
+      selectedHouseIds.size > 0 ||
+      lifeFilter !== 'all' ||
+      eduFilter !== 'all' ||
+      genderFilter !== 'all' ||
+      photoFilter !== 'all';
+
+    const activeFilterCount =
+      (branchFilter !== 'ALL' ? 1 : 0) +
+      (selectedGens.size > 0 ? 1 : 0) +
+      (selectedHouseIds.size > 0 ? 1 : 0) +
+      (lifeFilter !== 'all' ? 1 : 0) +
+      (eduFilter !== 'all' ? 1 : 0) +
+      (genderFilter !== 'all' ? 1 : 0) +
+      (photoFilter !== 'all' ? 1 : 0);
+
+    const resetAllFilters = () => {
+      setBranchFilter('ALL');
+      setSelectedGens(new Set());
+      setSelectedHouseIds(new Set());
+      setLifeFilter('all');
+      setEduFilter('all');
+      setGenderFilter('all');
+      setPhotoFilter('all');
+    };
+
+    const allowedHouseMemberIds = useMemo(() => {
+      if (selectedHouseIds.size === 0) return null;
+      const union = new Set<string>();
+      for (const h of houseOptions) {
+        if (selectedHouseIds.has(h.rootId)) {
+          for (const id of h.memberIds) union.add(id);
+        }
+      }
+      return union;
+    }, [selectedHouseIds, houseOptions]);
+
+    const matchesCustomFilter = useCallback(
+      (card: PositionedCard): boolean => {
+        const p = card.person;
+        if (branchFilter !== 'ALL' && (p.branch || 'ไม่ระบุสาย') !== branchFilter) return false;
+        if (selectedGens.size > 0 && !selectedGens.has(card.generation)) return false;
+        if (allowedHouseMemberIds && !allowedHouseMemberIds.has(p.id)) return false;
+        if (lifeFilter === 'living' && p.isDeceased) return false;
+        if (lifeFilter === 'deceased' && !p.isDeceased) return false;
+        if (eduFilter === 'studying' && !isPersonStudying(p)) return false;
+        if (eduFilter === 'graduated' && p.educationStatus !== 'graduated') return false;
+        if (eduFilter === 'working' && !p.occupation?.trim()) return false;
+        if (genderFilter !== 'all' && p.gender !== genderFilter) return false;
+        if (photoFilter === 'has-photo' && !p.photo) return false;
+        if (photoFilter === 'no-photo' && Boolean(p.photo)) return false;
+        return true;
+      },
+      [branchFilter, selectedGens, allowedHouseMemberIds, lifeFilter, eduFilter, genderFilter, photoFilter]
+    );
+
+    const matchedFilterCount = useMemo(() => {
+      if (!hasCustomFilter) return layout.cards.length;
+      return layout.cards.filter(matchesCustomFilter).length;
+    }, [hasCustomFilter, layout.cards, matchesCustomFilter]);
+
     const isCardDimmed = (card: PositionedCard): boolean => {
       if (highlightIds && highlightIds.size > 0) {
         return !highlightIds.has(card.person.id);
       }
-      if (branchFilter !== 'ALL') {
-        return (card.person.branch || 'ไม่ระบุสาย') !== branchFilter;
+      if (hasCustomFilter) {
+        return !matchesCustomFilter(card);
       }
       return false;
     };
+
+    const anchoredCard = useMemo(
+      () => (previewPersonId ? layout.cards.find((c) => c.person.id === previewPersonId) ?? null : null),
+      [previewPersonId, layout.cards]
+    );
 
     const focusRootPerson = focusRootId ? data.members[focusRootId] : null;
     const floatingBarBg = palette.isDark ? 'rgba(31,41,38,0.94)' : 'rgba(255,255,255,0.94)';
@@ -447,41 +617,383 @@ export const TreeCanvas = React.forwardRef<TreeCanvasHandle, TreeCanvasProps>(
         {/* Atmospheric Decorative / Custom Image Background */}
         <CanvasBackground themeSettings={themeSettings} palette={palette} />
 
-        {/* Top-left floating bar: Branch Filter + Active Focus/Highlight Banners */}
+        {/* Top-left floating bar: Multi-Checkbox Tree Filter + Active Focus/Highlight Banners */}
         <div className="absolute top-4 left-4 z-20 flex flex-wrap items-center gap-2 max-w-[calc(100%-32px)] pointer-events-none">
-          {branches.length > 1 && (
-            <div
-              style={{ backgroundColor: floatingBarBg, borderColor: palette.border }}
-              className="pointer-events-auto flex items-center gap-1 backdrop-blur-md px-2 py-1.5 rounded-xl border shadow-sm overflow-x-auto max-w-full"
-            >
-              <GitBranch className="w-3.5 h-3.5 theme-muted-text ml-1 shrink-0" />
+          {/* Smart Multi-Filter Trigger + Popover */}
+          <div className="relative pointer-events-auto">
+            <div className="flex items-center gap-1.5">
               <button
-                onClick={() => setBranchFilter('ALL')}
+                type="button"
+                onClick={() => setShowFilterMenu((v) => !v)}
                 style={
-                  branchFilter === 'ALL'
-                    ? { backgroundColor: palette.primary, color: '#fff' }
-                    : { color: palette.textMuted }
+                  hasCustomFilter || showFilterMenu
+                    ? { backgroundColor: palette.primary, color: '#fff', borderColor: palette.primary }
+                    : { backgroundColor: floatingBarBg, color: palette.textMain, borderColor: palette.border }
                 }
-                className="px-2.5 py-1 rounded-lg text-xs font-medium transition-colors shrink-0 cursor-pointer"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border backdrop-blur-md shadow-sm text-xs font-semibold hover:opacity-90 transition-all cursor-pointer"
               >
-                ทุกสาย ({Object.keys(data.members).length})
+                <SlidersHorizontal className="w-3.5 h-3.5" />
+                <span>ตัวกรองผัง</span>
+                {hasCustomFilter && (
+                  <span className="px-1.5 py-0.2 rounded-full bg-white/25 text-[10.5px] font-bold">
+                    {matchedFilterCount}/{layout.cards.length}
+                  </span>
+                )}
               </button>
-              {branches.map((b) => (
+
+              {hasCustomFilter && (
                 <button
-                  key={b}
-                  onClick={() => setBranchFilter(b)}
-                  style={
-                    branchFilter === b
-                      ? { backgroundColor: palette.accent, color: '#fff' }
-                      : { color: palette.textMuted }
-                  }
-                  className="px-2.5 py-1 rounded-lg text-xs font-medium transition-colors shrink-0 cursor-pointer"
+                  type="button"
+                  onClick={resetAllFilters}
+                  style={{ backgroundColor: floatingBarBg, borderColor: palette.border, color: palette.textMain }}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl border backdrop-blur-md shadow-sm text-xs font-medium hover:opacity-85 cursor-pointer"
+                  title="ล้างตัวกรองทั้งหมดเพื่อดูทุกคน"
                 >
-                  {b}
+                  <X className="w-3.5 h-3.5" />
+                  ดูทั้งหมด
                 </button>
-              ))}
+              )}
             </div>
-          )}
+
+            {showFilterMenu && (
+              <div
+                style={{
+                  backgroundColor: palette.bgSurface,
+                  borderColor: palette.border,
+                  color: palette.textMain,
+                }}
+                className="mt-2 w-[310px] sm:w-[350px] max-w-[calc(100vw-32px)] max-h-[70vh] rounded-2xl border shadow-2xl overflow-hidden flex flex-col animate-fade-in"
+              >
+                <div
+                  style={{ backgroundColor: palette.bgSubtle, borderColor: palette.border }}
+                  className="px-4 py-2.5 border-b flex items-center justify-between gap-2"
+                >
+                  <div className="flex items-center gap-2">
+                    <SlidersHorizontal className="w-3.5 h-3.5" style={{ color: palette.primary }} />
+                    <span className="text-xs font-bold">
+                      เลือกดูผังตระกูล ({matchedFilterCount}/{layout.cards.length} คน)
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    {activeFilterCount > 0 && (
+                      <button
+                        type="button"
+                        onClick={resetAllFilters}
+                        style={{ color: palette.primary }}
+                        className="text-[11px] font-semibold hover:underline cursor-pointer"
+                      >
+                        ดูทั้งหมด
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setShowFilterMenu(false)}
+                      className="p-1 rounded-lg hover:bg-black/5 cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="p-3.5 space-y-3.5 overflow-y-auto text-xs">
+                  {/* 1. Generations (Multi-checkbox) */}
+                  <div className="space-y-1.5">
+                    <div style={{ color: palette.textMuted }} className="text-[11px] font-semibold">
+                      เลือกรุ่น (ติ๊กได้หลายรุ่น)
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedGens(new Set())}
+                        style={
+                          selectedGens.size === 0
+                            ? { backgroundColor: palette.primary, color: '#fff', borderColor: palette.primary }
+                            : { backgroundColor: palette.bgSubtle, borderColor: palette.border }
+                        }
+                        className="px-2.5 py-1 rounded-lg border text-[11px] font-medium cursor-pointer"
+                      >
+                        ทุกรุ่น
+                      </button>
+                      {generationCounts.map(([gen, cnt]) => {
+                        const checked = selectedGens.has(gen);
+                        return (
+                          <button
+                            key={gen}
+                            type="button"
+                            onClick={() =>
+                              setSelectedGens((prev) => {
+                                const next = new Set(prev);
+                                if (next.has(gen)) next.delete(gen);
+                                else next.add(gen);
+                                return next;
+                              })
+                            }
+                            style={
+                              checked
+                                ? { backgroundColor: palette.primarySoft, color: palette.primary, borderColor: palette.primary }
+                                : { backgroundColor: palette.bgSubtle, borderColor: palette.border }
+                            }
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[11px] font-medium cursor-pointer"
+                          >
+                            {checked && <Check className="w-3 h-3" />}
+                            รุ่น {gen} ({cnt})
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* 2. Households / Sub-families (Multi-checkbox + 1-click Isolate Focus) */}
+                  {houseOptions.length > 0 && (
+                    <div className="space-y-1.5 pt-2 border-t" style={{ borderColor: palette.border }}>
+                      <div className="flex items-center justify-between">
+                        <span
+                          style={{ color: palette.textMuted }}
+                          className="text-[11px] font-semibold flex items-center gap-1"
+                        >
+                          <Home className="w-3 h-3" />
+                          เฉพาะบ้าน / ครอบครัว (ติ๊กหลายบ้านได้)
+                        </span>
+                        {selectedHouseIds.size > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setSelectedHouseIds(new Set())}
+                            style={{ color: palette.primary }}
+                            className="text-[10.5px] hover:underline cursor-pointer"
+                          >
+                            ล้าง
+                          </button>
+                        )}
+                      </div>
+                      <div className="space-y-1 max-h-40 overflow-y-auto pr-0.5">
+                        {houseOptions.map((h) => {
+                          const checked = selectedHouseIds.has(h.rootId);
+                          return (
+                            <div
+                              key={h.rootId}
+                              style={{
+                                backgroundColor: checked ? `${h.color}16` : palette.bgSubtle,
+                                borderColor: checked ? h.color : palette.border,
+                              }}
+                              className="flex items-center justify-between gap-1.5 px-2.5 py-1.5 rounded-xl border"
+                            >
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setSelectedHouseIds((prev) => {
+                                    const next = new Set(prev);
+                                    if (next.has(h.rootId)) next.delete(h.rootId);
+                                    else next.add(h.rootId);
+                                    return next;
+                                  })
+                                }
+                                className="flex items-center gap-2 min-w-0 flex-1 text-left cursor-pointer"
+                              >
+                                <span
+                                  style={{
+                                    backgroundColor: checked ? h.color : 'transparent',
+                                    borderColor: h.color,
+                                  }}
+                                  className="w-4 h-4 rounded flex items-center justify-center border shrink-0 text-white"
+                                >
+                                  {checked && <Check className="w-3 h-3" />}
+                                </span>
+                                <span className="text-[11.5px] font-medium truncate">{h.label}</span>
+                                <span style={{ color: palette.textMuted }} className="text-[10px] shrink-0">
+                                  ({h.memberIds.size})
+                                </span>
+                              </button>
+                              {onFocusSubtree && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    onFocusSubtree(h.rootId);
+                                    setShowFilterMenu(false);
+                                  }}
+                                  style={{ color: h.color }}
+                                  className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md hover:bg-black/5 text-[10px] font-semibold shrink-0 cursor-pointer"
+                                  title="ซ่อนบ้านอื่นแล้วแสดงเฉพาะบ้านนี้เต็มจอ"
+                                >
+                                  <Crosshair className="w-3 h-3" />
+                                  โฟกัส
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 3. Education & Work Status */}
+                  <div className="space-y-1.5 pt-2 border-t" style={{ borderColor: palette.border }}>
+                    <div
+                      style={{ color: palette.textMuted }}
+                      className="text-[11px] font-semibold flex items-center gap-1"
+                    >
+                      <GraduationCap className="w-3.5 h-3.5" />
+                      การศึกษา & อาชีพ
+                    </div>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {(
+                        [
+                          { id: 'all', label: 'ทั้งหมด' },
+                          { id: 'studying', label: 'กำลังศึกษาอยู่' },
+                          { id: 'graduated', label: 'เรียนจบแล้ว' },
+                          { id: 'working', label: 'วัยทำงาน (มีอาชีพ)' },
+                        ] as const
+                      ).map(({ id, label }) => {
+                        const active = eduFilter === id;
+                        return (
+                          <button
+                            key={id}
+                            type="button"
+                            onClick={() => setEduFilter(id)}
+                            style={
+                              active
+                                ? { backgroundColor: palette.primarySoft, color: palette.primary, borderColor: palette.primary }
+                                : { backgroundColor: palette.bgSubtle, borderColor: palette.border }
+                            }
+                            className="px-2.5 py-1.5 rounded-lg border text-[11px] font-medium text-left flex items-center gap-1 cursor-pointer"
+                          >
+                            {active && <Check className="w-3 h-3 shrink-0" />}
+                            <span className="truncate">{label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* 4. Life Status, Gender & Photo Completeness */}
+                  <div className="grid grid-cols-2 gap-2.5 pt-2 border-t" style={{ borderColor: palette.border }}>
+                    <div className="space-y-1">
+                      <div style={{ color: palette.textMuted }} className="text-[10.5px] font-semibold">
+                        สถานะชีวิต
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        {(
+                          [
+                            { id: 'all', label: 'ทั้งหมด' },
+                            { id: 'living', label: 'ยังมีชีวิตอยู่' },
+                            { id: 'deceased', label: 'ผู้ล่วงลับ' },
+                          ] as const
+                        ).map(({ id, label }) => (
+                          <button
+                            key={id}
+                            type="button"
+                            onClick={() => setLifeFilter(id)}
+                            style={
+                              lifeFilter === id
+                                ? { backgroundColor: palette.primarySoft, color: palette.primary, borderColor: palette.primary }
+                                : { backgroundColor: palette.bgSubtle, borderColor: palette.border }
+                            }
+                            className="px-2 py-1 rounded-lg border text-[11px] font-medium text-left cursor-pointer"
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <div style={{ color: palette.textMuted }} className="text-[10.5px] font-semibold">
+                        เพศ / รูปโปรไฟล์
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <div className="grid grid-cols-3 gap-1">
+                          {(
+                            [
+                              { id: 'all', label: 'ทุกเพศ' },
+                              { id: 'male', label: 'ชาย' },
+                              { id: 'female', label: 'หญิง' },
+                            ] as const
+                          ).map(({ id, label }) => (
+                            <button
+                              key={id}
+                              type="button"
+                              onClick={() => setGenderFilter(id)}
+                              style={
+                                genderFilter === id
+                                  ? { backgroundColor: palette.accentSoft, color: palette.accent, borderColor: palette.accent }
+                                  : { backgroundColor: palette.bgSubtle, borderColor: palette.border }
+                              }
+                              className="py-1 rounded-lg border text-[10.5px] font-medium text-center cursor-pointer"
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                        <div className="grid grid-cols-2 gap-1">
+                          {(
+                            [
+                              { id: 'has-photo', label: 'มีรูปแล้ว' },
+                              { id: 'no-photo', label: 'ยังไม่มีรูป' },
+                            ] as const
+                          ).map(({ id, label }) => (
+                            <button
+                              key={id}
+                              type="button"
+                              onClick={() => setPhotoFilter((prev) => (prev === id ? 'all' : id))}
+                              style={
+                                photoFilter === id
+                                  ? { backgroundColor: palette.primarySoft, color: palette.primary, borderColor: palette.primary }
+                                  : { backgroundColor: palette.bgSubtle, borderColor: palette.border }
+                              }
+                              className="py-1 px-1.5 rounded-lg border text-[10.5px] font-medium text-center cursor-pointer"
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 5. Branches (if multiple) */}
+                  {branches.length > 1 && (
+                    <div className="space-y-1.5 pt-2 border-t" style={{ borderColor: palette.border }}>
+                      <div
+                        style={{ color: palette.textMuted }}
+                        className="text-[11px] font-semibold flex items-center gap-1"
+                      >
+                        <GitBranch className="w-3 h-3" />
+                        สายตระกูล
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setBranchFilter('ALL')}
+                          style={
+                            branchFilter === 'ALL'
+                              ? { backgroundColor: palette.primary, color: '#fff', borderColor: palette.primary }
+                              : { backgroundColor: palette.bgSubtle, borderColor: palette.border }
+                          }
+                          className="px-2.5 py-1 rounded-lg border text-[11px] font-medium cursor-pointer"
+                        >
+                          ทุกสาย
+                        </button>
+                        {branches.map((b) => (
+                          <button
+                            key={b}
+                            type="button"
+                            onClick={() => setBranchFilter(b)}
+                            style={
+                              branchFilter === b
+                                ? { backgroundColor: palette.accent, color: '#fff', borderColor: palette.accent }
+                                : { backgroundColor: palette.bgSubtle, borderColor: palette.border }
+                            }
+                            className="px-2.5 py-1 rounded-lg border text-[11px] font-medium cursor-pointer"
+                          >
+                            {b}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
 
           {focusRootPerson && (
             <div
@@ -1178,6 +1690,68 @@ export const TreeCanvas = React.forwardRef<TreeCanvasHandle, TreeCanvasProps>(
             })}
           </div>
         </div>
+
+        {/* Live Anchored Person Popover — physically attached beside the selected card, glides with pan/zoom! */}
+        {anchoredCard && previewPopover && (() => {
+          const isNarrow = viewportSize.width < 640;
+          const popWidth = isNarrow ? Math.min(316, viewportSize.width - 20) : 356;
+          const cardLeftX = transform.x + anchoredCard.x * transform.scale;
+          const cardRightX = transform.x + (anchoredCard.x + anchoredCard.width) * transform.scale;
+          const cardTopY = transform.y + anchoredCard.y * transform.scale;
+          const cardBottomY = transform.y + (anchoredCard.y + anchoredCard.height) * transform.scale;
+
+          let left: number;
+          let top: number;
+          let arrowSide: 'left' | 'right' | 'top';
+
+          if (isNarrow) {
+            left = cardLeftX + (anchoredCard.width * transform.scale - popWidth) / 2;
+            top = cardBottomY + 12;
+            arrowSide = 'top';
+          } else {
+            const fitsRight = cardRightX + 14 + popWidth <= viewportSize.width - 12;
+            if (fitsRight) {
+              left = cardRightX + 14;
+              arrowSide = 'left';
+            } else {
+              left = cardLeftX - popWidth - 14;
+              arrowSide = 'right';
+            }
+            top = cardTopY - 16;
+          }
+
+          return (
+            <div className="pointer-events-none absolute inset-0 z-30 overflow-hidden">
+              <div
+                style={{
+                  transform: `translate3d(${Math.round(left)}px, ${Math.round(top)}px, 0)`,
+                }}
+                className="pointer-events-auto absolute top-0 left-0 will-change-transform"
+              >
+                {/* Pointer Arrow pointing straight at the member card */}
+                {arrowSide === 'left' && (
+                  <div
+                    style={{ backgroundColor: palette.bgSubtle, borderColor: palette.border }}
+                    className="w-3 h-3 rotate-45 border-l border-b absolute -left-1.5 top-7 z-10"
+                  />
+                )}
+                {arrowSide === 'right' && (
+                  <div
+                    style={{ backgroundColor: palette.bgSubtle, borderColor: palette.border }}
+                    className="w-3 h-3 rotate-45 border-r border-t absolute -right-1.5 top-7 z-10"
+                  />
+                )}
+                {arrowSide === 'top' && (
+                  <div
+                    style={{ backgroundColor: palette.bgSubtle, borderColor: palette.border }}
+                    className="w-3 h-3 rotate-45 border-l border-t absolute left-1/2 -translate-x-1/2 -top-1.5 z-10"
+                  />
+                )}
+                {previewPopover}
+              </div>
+            </div>
+          );
+        })()}
       </div>
     );
   }

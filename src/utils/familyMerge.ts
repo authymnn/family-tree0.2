@@ -114,7 +114,9 @@ const SCALAR_PERSON_KEYS: Array<keyof Person> = [
   'isDeceased',
   'deathDate',
   'occupation',
+  'educationStatus',
   'education',
+  'graduatedFrom',
   'phone',
   'lineId',
   'address',
@@ -279,7 +281,9 @@ export function buildFamilySheetRows(
     'บิดา/มารดา',
     'คู่สมรส',
     'อาชีพ',
+    'สถานะการศึกษา',
     'การศึกษา',
+    'เรียนจบจาก',
     'เบอร์โทร',
     'Line ID',
     'ที่อยู่',
@@ -327,7 +331,13 @@ export function buildFamilySheetRows(
       parentNames,
       spouseNames,
       m.occupation || '',
+      m.educationStatus === 'studying'
+        ? 'กำลังศึกษาอยู่'
+        : m.educationStatus === 'graduated'
+          ? 'เรียนจบแล้ว'
+          : '',
       m.education || '',
+      m.graduatedFrom || '',
       m.phone || '',
       m.lineId || '',
       m.address || '',
